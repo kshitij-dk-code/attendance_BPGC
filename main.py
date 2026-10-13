@@ -108,37 +108,48 @@ async def login(request: Request, device_session: str = Cookie(None)):
     return await oauth.google.authorize_redirect(request, str(redirect_uri))
 
 # 5. STUDENT: Google Auth Callback & Record Attendance
-@app.get("/auth/callback")
+@app.get("/auth/callback", response_class=HTMLResponse)
 async def auth_callback(request: Request, device_session: str = Cookie(None)):
-    # Verify Device Session
+    # Helper to render the status template
+    def render_status(message: str, success: bool = False, email: str = None):
+        return templates.TemplateResponse(
+            request=request,
+            name="status.html",
+            context={"request": request, "message": message, "success": success, "email": email}
+        )
+
+    # 1. Verify Device Session
     if not device_session:
-        raise HTTPException(status_code=403, detail="Invalid session. You must scan the QR code on the projector.")
+        return render_status("Invalid session. You must scan the QR code on the projector.", success=False)
     
-    # Process Google Auth
-    token = await oauth.google.authorize_access_token(request)
-    user = token.get('userinfo')
+    # 2. Process Google Auth
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        user = token.get('userinfo')
+    except Exception:
+         return render_status("Google authentication failed or was cancelled.", success=False)
     
     if not user or not user.get('email'):
-        raise HTTPException(status_code=400, detail="Failed to fetch user email from Google.")
+        return render_status("Failed to fetch user email from Google.", success=False)
         
     email = user.get('email')
     
-    # Verify Domain
+    # 3. Verify Domain
     if not email.endswith(ALLOWED_EMAIL_DOMAIN):
-        raise HTTPException(status_code=403, detail=f"Please use your {ALLOWED_EMAIL_DOMAIN} account.")
+        return render_status(f"Access Denied. Please log in using your {ALLOWED_EMAIL_DOMAIN} account.", success=False)
     
-    # Record in DB
+    # 4. Record in DB
     try:
         conn = sqlite3.connect('attendance.db')
         c = conn.cursor()
         c.execute("INSERT INTO attendance (email) VALUES (?)", (email,))
         conn.commit()
     except sqlite3.IntegrityError:
-        return {"message": f"Attendance already marked for {email} today!"}
+        return render_status("Attendance has already been marked for this account today.", success=True, email=email)
     finally:
         conn.close()
         
-    return {"message": f"Attendance marked successfully for {email}!"}
+    return render_status("Attendance marked successfully!", success=True, email=email)
 
 if __name__ == "__main__":
     import uvicorn

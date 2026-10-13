@@ -1,1 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Attendance Portal</title>
+    
+    <!-- Load Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load Google Fonts for a clean, modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Load QRCode.js library for generating the QR code -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Tailwind slate-900 */
+            /* Add a subtle radial gradient for visual depth */
+            background-image: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        }
+        
+        #qrcode img {
+            /* Ensure the QR code has no anti-aliasing issues on large screens */
+            image-rendering: pixelated;
+            margin: 0 auto;
+        }
+
+        /* Smooth transition for the progress bar */
+        #progress-bar {
+            transition: width 0.1s linear;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center text-white p-4">
+
+    <!-- Header Section -->
+    <div class="text-center mb-8">
+        <h1 class="text-5xl font-extrabold tracking-tight mb-2 text-white drop-shadow-md">
+            Scan to Mark Attendance
+        </h1>
+        <p class="text-xl text-slate-400 font-medium" id="status-text">
+            Connecting to backend server...
+        </p>
+    </div>
+
+    <!-- QR Code Card (High Contrast for Projectors) -->
+    <div class="bg-white rounded-3xl p-8 md:p-12 shadow-2xl relative overflow-hidden flex flex-col items-center">
+        
+        <!-- QR Code Container -->
+        <div id="qrcode" class="p-4 bg-white rounded-xl border-4 border-slate-100 shadow-inner">
+            <!-- QR Code will be injected here by JS -->
+        </div>
+
+        <!-- Instructional Text inside Card -->
+        <div class="mt-8 text-center text-slate-800">
+            <p class="text-2xl font-bold mb-1">Open your camera</p>
+            <p class="text-slate-500 font-medium">Ensure you are connected to the campus Wi-Fi</p>
+        </div>
+
+        <!-- Visual Countdown / Progress Bar -->
+        <div class="w-full bg-slate-200 h-2 mt-8 rounded-full overflow-hidden">
+            <div id="progress-bar" class="bg-blue-600 h-full w-full rounded-full"></div>
+        </div>
+        
+        <div class="w-full flex justify-between mt-2 text-sm font-semibold text-slate-400">
+            <span>Refreshing...</span>
+            <span id="time-left">10.0s</span>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="mt-12 text-slate-500 text-sm font-medium tracking-wide">
+        SECURE ATTENDANCE PORTAL &copy; <span id="year"></span>
+    </div>
+
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+
+        const API_URL = '/api/admin/generate-qr-token';
+        const REFRESH_INTERVAL_MS = 10000; // 10 seconds
+        const UPDATE_STEP_MS = 50; // Update progress bar every 50ms for smoothness
+
+        let qrcodeInstance = null;
+        let timeRemaining = REFRESH_INTERVAL_MS;
+        let countdownTimer = null;
+        let isUsingMockData = false;
+
+        async function fetchAndRenderQR() {
+            let token = "";
+            let hostUrl = window.location.origin;
+            
+            // Adjust host if running as a local file or in an iframe sandbox
+            if (hostUrl === "null" || hostUrl === "file://" || hostUrl.includes("sandbox")) {
+                hostUrl = "http://127.0.0.1:8000"; 
+            }
+
+            try {
+                // Attempt to fetch from the actual FastAPI backend
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                token = data.token;
+                
+                if (isUsingMockData) {
+                    isUsingMockData = false;
+                    document.getElementById('status-text').textContent = "Connected to Server. Live Mode.";
+                    document.getElementById('status-text').classList.replace('text-amber-400', 'text-emerald-400');
+                } else if (document.getElementById('status-text').textContent.includes("Connecting")) {
+                    document.getElementById('status-text').textContent = "Live Attendance Active";
+                    document.getElementById('status-text').classList.add('text-emerald-400');
+                }
+
+            } catch (error) {
+                // Fallback for UI testing if the backend is down
+                if (!isUsingMockData) {
+                    console.warn("Backend not detected. Falling back to mock token generation for UI preview.");
+                    isUsingMockData = true;
+                    document.getElementById('status-text').textContent = "Preview Mode (Backend Disconnected)";
+                    document.getElementById('status-text').classList.replace('text-slate-400', 'text-amber-400');
+                    document.getElementById('status-text').classList.replace('text-emerald-400', 'text-amber-400');
+                }
+                // Generate a dummy token to demonstrate the refreshing
+                token = "mock_preview_token_" + Math.random().toString(36).substring(2, 10);
+            }
+
+            const scanUrl = `${hostUrl}/scan?token=${token}`;
+            
+            // Generate or update the QR Code
+            const qrContainer = document.getElementById("qrcode");
+            
+            if (qrcodeInstance) {
+                // If instance exists, update it
+                qrcodeInstance.clear();
+                qrcodeInstance.makeCode(scanUrl);
+            } else {
+                // Create first instance (Large 350x350 for projectors)
+                qrcodeInstance = new QRCode(qrContainer, {
+                    text: scanUrl,
+                    width: 350,
+                    height: 350,
+                    colorDark : "#0f172a", // Tailwind slate-900 for high contrast
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H // High error correction
+                });
+            }
+
+            // Reset and start the timer UI
+            resetTimer();
+        }
+
+        function resetTimer() {
+            clearInterval(countdownTimer);
+            timeRemaining = REFRESH_INTERVAL_MS;
+            
+            const progressBar = document.getElementById('progress-bar');
+            const timeLeftText = document.getElementById('time-left');
+
+            countdownTimer = setInterval(() => {
+                timeRemaining -= UPDATE_STEP_MS;
+                
+                // Calculate percentage for the width
+                const percentage = (timeRemaining / REFRESH_INTERVAL_MS) * 100;
+                progressBar.style.width = `${Math.max(0, percentage)}%`;
+                
+                // Update text display (e.g., 9.5s)
+                timeLeftText.textContent = `${(timeRemaining / 1000).toFixed(1)}s`;
+
+                // Change color to red when time is running low (< 3 seconds)
+                if (timeRemaining < 3000) {
+                    progressBar.classList.replace('bg-blue-600', 'bg-red-500');
+                } else {
+                    progressBar.classList.replace('bg-red-500', 'bg-blue-600');
+                }
+
+                // Trigger next refresh when timer hits 0
+                if (timeRemaining <= 0) {
+                    clearInterval(countdownTimer);
+                    fetchAndRenderQR();
+                }
+            }, UPDATE_STEP_MS);
+        }
+
+        // Start the process when the page loads
+        window.onload = () => {
+            fetchAndRenderQR();
+        };
+
+    </script>
+</body>
+</html>

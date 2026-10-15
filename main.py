@@ -1,12 +1,14 @@
-from fastapi import FastAPI, Request, HTTPException, Cookie
+from fastapi import FastAPI, Request, HTTPException, Cookie, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.middleware.sessions import SessionMiddleware
 from itsdangerous import URLSafeTimedSerializer
 from authlib.integrations.starlette_client import OAuth
 import time
 import sqlite3
 import os
+import secrets
 
 app = FastAPI()
 
@@ -14,6 +16,26 @@ app = FastAPI()
 SECRET_KEY = "your-super-secret-key"
 ALLOWED_EMAIL_DOMAIN = "@goa.bits-pilani.ac.in"
 QR_LIFESPAN_SECONDS = 45
+
+# --- Security Setup ---
+security = HTTPBasic()
+
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    # Pulls from Replit Secrets, defaults to "admin" if missing
+    expected_username = os.getenv("ADMIN_USERNAME", "admin")
+    expected_password = os.getenv("ADMIN_PASSWORD", "admin")
+    
+    # compare_digest prevents timing attacks
+    correct_username = secrets.compare_digest(credentials.username, expected_username)
+    correct_password = secrets.compare_digest(credentials.password, expected_password)
+    
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
 
 # Authlib requires SessionMiddleware to store temporary codes and states
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -51,9 +73,9 @@ init_db()
 
 # --- Endpoints ---
 
-# 1. ADMIN: Serve the UI Dashboard
+# 1. ADMIN: Serve the UI Dashboard (Secured)
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request):
+async def admin_dashboard(request: Request, username: str = Depends(verify_admin)):
     try:
         return templates.TemplateResponse(
             request=request, 
@@ -63,9 +85,9 @@ async def admin_dashboard(request: Request):
     except Exception as e:
         return HTMLResponse(f"<h1>Template Error</h1><p>Details: {e}</p>")
 
-# 2. ADMIN: Generate Rotating Token
+# 2. ADMIN: Generate Rotating Token (Secured)
 @app.get("/api/admin/generate-qr-token")
-async def generate_qr_token(request: Request):
+async def generate_qr_token(request: Request, username: str = Depends(verify_admin)):
     nonce = str(time.time())
     token = serializer.dumps({"nonce": nonce})
     

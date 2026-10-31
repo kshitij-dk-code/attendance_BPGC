@@ -5,5 +5,5 @@ httpx
 itsdangerous
 jinja2
 psycopg2-binary
-gradio
+//gradio
 python-multipart

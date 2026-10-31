@@ -119,25 +119,28 @@
 
         .header .email-chip {
             display: inline-flex;
+            flex-wrap: wrap;
+            justify-content: center;
             align-items: center;
-            gap: 8px;
-            padding: 6px 14px;
+            gap: 4px 8px;
+            padding: 8px 16px;
             background: rgba(255,255,255,0.06);
             border: 1px solid var(--card-border);
             border-radius: 12px;
-            font-size: 0.85rem;
+            font-size: clamp(0.75rem, 3vw, 0.9rem);
             color: var(--text-muted);
             font-weight: 500;
             max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            box-sizing: border-box;
+            text-align: center;
         }
 
-        .email-chip strong {
+        .header .email-chip strong {
             color: var(--text);
             font-family: 'Space Mono', monospace;
-            font-size: 0.8rem;
+            font-size: clamp(0.68rem, 2.8vw, 0.82rem);
+            font-weight: 700;
+            word-break: break-all;
         }
 
         /* ---------- Iframe ---------- */

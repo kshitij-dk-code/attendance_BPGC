@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifying Network</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+            --card: rgba(255, 255, 255, 0.06);
+            --card-border: rgba(255, 255, 255, 0.14);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.35);
+            --success: #22c55e;
+            --error: #ef4444;
+            --radius: 24px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            background-attachment: fixed;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 25% 25%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+                radial-gradient(circle at 75% 75%, rgba(139, 92, 246, 0.12) 0%, transparent 45%);
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 24px;
+        }
+
+        .card {
+            background: var(--card);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1.5px solid var(--card-border);
+            border-radius: var(--radius);
+            padding: 40px 32px;
+            max-width: 440px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.5);
+            animation: enter 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes enter {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .spinner {
+            width: 56px;
+            height: 56px;
+            border: 4px solid rgba(99, 102, 241, 0.2);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            margin: 0 auto 24px;
+            animation: spin 0.9s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-size: 30px;
+            margin: 0 auto 20px;
+        }
+
+        .icon.ok {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.4);
+            box-shadow: 0 0 26px rgba(34, 197, 94, 0.25);
+        }
+
+        .icon.fail {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--error);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            box-shadow: 0 0 26px rgba(239, 68, 68, 0.25);
+        }
+
+        h2 {
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            letter-spacing: -0.02em;
+        }
+
+        p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .ip-table {
+            width: 100%;
+            margin: 20px 0;
+            text-align: left;
+            font-size: 0.85rem;
+        }
+
+        .ip-table div {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 14px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            margin-bottom: 8px;
+        }
+
+        .ip-table span { color: var(--text-muted); }
+        .ip-table code {
+            font-family: 'Space Mono', monospace;
+            color: var(--text);
+            font-weight: 700;
+            word-break: break-all;
+            text-align: right;
+        }
+
+        .hint {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        #status-detail { display: none; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="card">
+            <!-- Checking state -->
+            <div id="state-checking">
+                <div class="spinner"></div>
+                <h2>Verifying your network</h2>
+                <p>Make sure you are connected to the required WiFi network, then stay on this page.</p>
+            </div>
+
+            <!-- Success state -->
+            <div id="state-ok" style="display:none;">
+                <div class="icon ok">✓</div>
+                <h2>Network verified</h2>
+                <p>Redirecting you to sign in…</p>
+            </div>
+
+            <!-- Failure state -->
+            <div id="state-fail" style="display:none;">
+                <div class="icon fail">⚠</div>
+                <h2>Wrong network</h2>
+                <p id="fail-message">You must be connected to the required WiFi network.</p>
+                <div class="ip-table">
+                    <div><span>Required prefix</span><code id="expected-ip">—</code></div>
+                    <div><span>Your WiFi IP</span><code id="local-ip">—</code></div>
+                    <div><span>Public IP</span><code id="public-ip">—</code></div>
+                </div>
+                <div class="hint">Connect to the campus WiFi and scan the QR code again.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const netToken = {{ net_token | tojson }};
+
+        function detectLocalIP() {
+            return new Promise((resolve) => {
+                let settled = false;
+                const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+                try {
+                    const pc = new RTCPeerConnection({ iceServers: [] });
+                    pc.createDataChannel("x");
+                    pc.createOffer()
+                        .then(offer => pc.setLocalDescription(offer))
+                        .catch(() => done(null));
+                    pc.onicecandidate = (e) => {
+                        if (!e.candidate || !e.candidate.candidate) {
+                            done(null);
+                            return;
+                        }
+                        const m = e.candidate.candidate.match(/(\d{1,3}(\.\d{1,3}){3})/);
+                        if (m) {
+                            const ip = m[1];
+                            if (!ip.startsWith("0.") && !ip.startsWith("127.")) {
+                                done(ip);
+                                try { pc.close(); } catch (_) {}
+                            }
+                        }
+                    };
+                    setTimeout(() => done(null), 3500);
+                } catch (err) {
+                    done(null);
+                }
+            });
+        }
+
+        async function verify() {
+            const localIP = await detectLocalIP();
+            try {
+                const resp = await fetch("/api/verify-network", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: "net_token=" + encodeURIComponent(netToken) +
+                          "&local_ip=" + encodeURIComponent(localIP || "")
+                });
+                const data = await resp.json();
+
+                if (data.ok) {
+                    document.getElementById("state-checking").style.display = "none";
+                    document.getElementById("state-ok").style.display = "block";
+                    setTimeout(() => { window.location.href = data.redirect || "/login"; }, 900);
+                } else {
+                    document.getElementById("state-checking").style.display = "none";
+                    document.getElementById("state-fail").style.display = "block";
+                    document.getElementById("fail-message").textContent = data.message || "Wrong network.";
+                    document.getElementById("expected-ip").textContent = data.expected || "—";
+                    document.getElementById("local-ip").textContent = data.local_ip || "not detected";
+                    document.getElementById("public-ip").textContent = data.public_ip || "—";
+                }
+            } catch (err) {
+                document.getElementById("state-checking").style.display = "none";
+                document.getElementById("state-fail").style.display = "block";
+                document.getElementById("fail-message").textContent = "Could not verify your network. Please try again.";
+            }
+        }
+
+        verify();
+    </script>
+</body>
+</html>

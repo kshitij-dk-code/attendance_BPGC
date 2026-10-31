@@ -544,8 +544,8 @@
 
                 <div class="input-group">
                     <label>WiFi IP Prefix (Optional)</label>
-                    <input type="text" id="ip-prefix-input" placeholder="e.g. 14.139.">
-                    <small>When set, blocks 5G and home WiFi connections.</small>
+                    <input type="text" id="ip-prefix-input" placeholder="e.g. 47.29.">
+                    <small>Blocks devices outside this network. <span id="ip-hint">Detecting your IP…</span></small>
                 </div>
 
                 <div class="divider"></div>
@@ -608,6 +608,18 @@
             document.getElementById('dashboard').classList.add('visible');
             document.getElementById('error-msg').style.display = 'none';
             showToast('Welcome back.');
+            detectAdminIP();
+        }
+
+        async function detectAdminIP() {
+            try {
+                const r = await fetch('/api/check-ip');
+                const d = await r.json();
+                document.getElementById('ip-hint').textContent =
+                    'Server sees your IP as ' + d.detected_ip + ' — use that as the prefix.';
+            } catch (e) {
+                document.getElementById('ip-hint').textContent = 'Could not detect your IP.';
+            }
         }
 
         async function startSession() {

@@ -22,14 +22,15 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
-consumed_tokens = set()
+consumed_tokens = {}  # (nonce, device_id) -> scanned_at timestamp; QR can be scanned by many DIFFERENT devices
+CONSUMED_MAX_AGE = 86400
 
 # Tracks the dynamic DB file for the current session
 session_state = {
     "is_active": False,
     "form_url": "",
     "timeout": 300,
-    "allowed_ip": "",
+    "allowed_ip": "10.20.1.92",
     "db_file": ""
 }
 
@@ -162,14 +163,21 @@ async def scan_qr(request: Request, token: str):
     except Exception:
         return render_status(request, "QR Code expired. Please scan the newest QR code shown on screen.")
 
-    if data["nonce"] in consumed_tokens:
-        return render_status(request, "This QR code has already been scanned. Please scan the newest one.")
-    consumed_tokens.add(data["nonce"])
-
     # Lock the Device Fingerprint
     device_id = request.cookies.get("device_id")
     if not device_id:
         device_id = secrets.token_hex(16)
+
+    # Only block the SAME device from reusing a QR code — other students
+    # scanning the same QR with their own devices must be allowed through.
+    now = time.time()
+    for key in [k for k, ts in consumed_tokens.items() if now - ts > CONSUMED_MAX_AGE]:
+        del consumed_tokens[key]
+
+    scan_key = (data["nonce"], device_id)
+    if scan_key in consumed_tokens:
+        return render_status(request, "You have already scanned this QR code. Please scan the newest one if it refreshed.")
+    consumed_tokens[scan_key] = now
 
     # WiFi restriction: verify the phone's LOCAL IP (client-side, since the
     # server only sees the public/NAT'd address) before issuing cookies.

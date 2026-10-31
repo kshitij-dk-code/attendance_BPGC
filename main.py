@@ -19,6 +19,9 @@ app = FastAPI()
 SECRET_KEY = "your-super-secret-key"
 ALLOWED_EMAIL_DOMAIN = "@goa.bits-pilani.ac.in"
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+# Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
+# Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
@@ -30,7 +33,7 @@ session_state = {
     "is_active": False,
     "form_url": "",
     "timeout": 300,
-    "allowed_ip": "10.20.1.92",
+    "allowed_ip": "",
     "db_file": ""
 }
 
@@ -73,7 +76,7 @@ class StartSessionRequest(BaseModel):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
-    return templates.TemplateResponse(request=request, name="admin_dashboard.html")
+    return templates.TemplateResponse(request=request, name="admin_dashboard.html", context={"default_ip": DEFAULT_ALLOWED_IP})
 
 @app.post("/api/admin/start")
 async def start_session(req: StartSessionRequest, authorized: bool = Depends(verify_admin_header)):

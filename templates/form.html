@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complete Attendance Form</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; margin: 0; padding: 0; text-align: center; }
+        .header { background: #1a1a1a; color: white; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header p { margin: 5px 0 0 0; color: #a4b0be; }
+        iframe { width: 100%; max-width: 800px; height: 75vh; border: none; margin-top: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: white; }
+        
+        .action-bar { position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 20px; box-shadow: 0 -4px 12px rgba(0,0,0,0.1); display: flex; flex-direction: column; align-items: center; box-sizing: border-box; }
+        .content { padding-bottom: 120px; } 
+        
+        #status-text { font-size: 16px; font-weight: bold; color: #333; margin: 0; }
+        .success-text { color: #28a745 !important; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>Required Google Form</h2>
+        <p>Logged in as: <strong>{{ email }}</strong></p>
+    </div>
+
+    <div class="content">
+        <!-- The ID and onload event are crucial here -->
+        <iframe id="google-form" src="{{ form_url }}" loading="lazy"></iframe>
+    </div>
+
+    <div class="action-bar">
+        <p id="status-text">⏳ Waiting for you to submit the form above...</p>
+        
+        <!-- The hidden POST form. No buttons for the student to click. -->
+        <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST" style="display: none;"></form>
+    </div>
+
+    <script>
+        let loadCount = 0;
+        const iframe = document.getElementById('google-form');
+        const statusText = document.getElementById('status-text');
+        const form = document.getElementById('finalize-form');
+
+        // This triggers every time the iframe loads a new URL
+        iframe.onload = function() {
+            loadCount++;
+            
+            // Load 1: The blank form loading for the first time.
+            // Load 2: The Google Form "Thank you for submitting" page loading.
+            if (loadCount === 2) {
+                statusText.innerText = "✅ Form submitted! Finalizing your attendance...";
+                statusText.classList.add("success-text");
+                
+                // Automatically submit the hidden POST request
+                form.submit();
+            }
+        };
+    </script>
+</body>
+</html>

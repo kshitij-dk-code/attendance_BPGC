@@ -134,7 +134,7 @@
             flex-direction: column;
             align-items: center;
             gap: 6px;
-            padding: 14px 20px;
+            padding: 14px 16px;
             background: rgba(255,255,255,0.05);
             border: 1px solid var(--card-border);
             border-radius: 14px;
@@ -157,10 +157,14 @@
             color: var(--text);
             font-family: 'Space Mono', monospace;
             font-weight: 700;
-            font-size: clamp(0.75rem, 3.5vw, 0.92rem);
-            word-break: break-all;
+            font-size: min(3.6vw, 0.9rem);
+            white-space: nowrap;
+            word-break: normal;
+            overflow-wrap: normal;
             text-align: center;
             line-height: 1.4;
+            max-width: 100%;
+            letter-spacing: -0.02em;
         }
 
         @media (max-width: 480px) {

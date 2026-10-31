@@ -53,8 +53,14 @@ def verify_admin_header(request: Request):
     return True
 
 def get_client_ip(request: Request):
-    ip_header = request.headers.get("X-Forwarded-For")
-    return ip_header.split(',')[0].strip() if ip_header else request.client.host
+    # Try multiple headers in order of reliability behind proxies
+    for header in ["X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP", "True-Client-IP"]:
+        val = request.headers.get(header)
+        if val:
+            ip = val.split(",")[0].strip()
+            if ip and ip != "unknown":
+                return ip
+    return request.client.host if request.client else "unknown"
 
 class StartSessionRequest(BaseModel):
     form_url: str
@@ -124,6 +130,18 @@ async def generate_qr_token(request: Request, lifespan: int = 45, authorized: bo
     nonce = str(time.time())
     token = serializer.dumps({"nonce": nonce, "lifespan": lifespan})
     return {"token": token, "scan_url": f"{str(request.base_url).rstrip('/')}/scan?token={token}", "expires_in": lifespan}
+
+@app.get("/api/check-ip")
+async def check_ip(request: Request):
+    client_ip = get_client_ip(request)
+    return {
+        "detected_ip": client_ip,
+        "x_forwarded_for": request.headers.get("X-Forwarded-For", ""),
+        "x_real_ip": request.headers.get("X-Real-IP", ""),
+        "raw_client_host": request.client.host if request.client else "",
+        "allowed_prefix": session_state.get("allowed_ip", ""),
+        "wifi_match": client_ip.startswith(session_state.get("allowed_ip", "")) if session_state.get("allowed_ip") else None
+    }
 
 @app.get("/scan")
 async def scan_qr(request: Request, token: str):

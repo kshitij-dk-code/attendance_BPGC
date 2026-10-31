@@ -1,67 +1,47 @@
 from fastapi import FastAPI, Request, HTTPException, Cookie, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.middleware.sessions import SessionMiddleware
 from itsdangerous import URLSafeTimedSerializer
 from authlib.integrations.starlette_client import OAuth
-import time
 import sqlite3
+import time
 import os
 import secrets
+
+# ALLOW LOCAL OAUTH OVER HTTP FOR DEBUGGING
+os.environ["AUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 app = FastAPI()
 
 # --- Configuration ---
 SECRET_KEY = "your-super-secret-key"
 ALLOWED_EMAIL_DOMAIN = "@goa.bits-pilani.ac.in"
-QR_LIFESPAN_SECONDS = 45
 
-# --- Security Setup ---
-security = HTTPBasic()
+# Fallback to defaults if env vars are missing locally
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+GOOGLE_FORM_URL = os.getenv("GOOGLE_FORM_URL", "google_form_link_here")
 
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    # Pulls from Replit Secrets, defaults to "admin" if missing
-    expected_username = os.getenv("ADMIN_USERNAME", "admin")
-    expected_password = os.getenv("ADMIN_PASSWORD", "admin")
-    
-    # compare_digest prevents timing attacks
-    correct_username = secrets.compare_digest(credentials.username, expected_username)
-    correct_password = secrets.compare_digest(credentials.password, expected_password)
-    
-    if not (correct_username and correct_password):
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-
-# Authlib requires SessionMiddleware to store temporary codes and states
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+serializer = URLSafeTimedSerializer(SECRET_KEY)
+consumed_tokens = set()
 
 # --- Google OAuth Setup ---
 oauth = OAuth()
 oauth.register(
     name='google',
-    client_id=os.getenv("YOUR_GOOGLE_CLIENT_ID"), 
-    client_secret=os.getenv("YOUR_GOOGLE_CLIENT_SECRET"),
+    # PASTE YOUR LOCAL TESTING KEYS IN THE SECOND ARGUMENT HERE:
+    client_id=os.getenv("YOUR_GOOGLE_CLIENT_ID", "google_client_id_here"),
+    client_secret=os.getenv("YOUR_GOOGLE_CLIENT_SECRET", "google_client_secret_here"),
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={
-        'scope': 'openid email profile',
-        'prompt': 'select_account'  # This forces the account selection screen
-    }
+    client_kwargs={'scope': 'openid email profile', 'prompt': 'select_account'}
 )
 
-serializer = URLSafeTimedSerializer(SECRET_KEY)
-consumed_tokens = set()
-
-# --- Setup Templates ---
 if not os.path.exists("templates"):
     os.makedirs("templates")
 templates = Jinja2Templates(directory="templates")
 
-# --- Database Setup ---
+# --- Local SQLite Setup ---
 def init_db():
     conn = sqlite3.connect('attendance.db')
     c = conn.cursor()
@@ -71,108 +51,124 @@ def init_db():
     conn.close()
 init_db()
 
+# --- Admin Authentication ---
+def verify_admin_header(request: Request):
+    auth_header = request.headers.get("X-Admin-Password")
+    if not auth_header or not secrets.compare_digest(auth_header, ADMIN_PASSWORD):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
 # --- Endpoints ---
 
-# 1. ADMIN: Serve the UI Dashboard (Secured)
+# 1. ADMIN: Serve the UI Dashboard
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request, username: str = Depends(verify_admin)):
-    try:
-        return templates.TemplateResponse(
-            request=request, 
-            name="admin_dashboard.html", 
-            context={"request": request}
-        )
-    except Exception as e:
-        return HTMLResponse(f"<h1>Template Error</h1><p>Details: {e}</p>")
+async def admin_dashboard(request: Request):
+    return templates.TemplateResponse(
+        request=request, 
+        name="admin_dashboard.html"
+    )
 
-# 2. ADMIN: Generate Rotating Token (Secured)
+# 2. ADMIN: Generate Rotating Token (Dynamic Lifespan)
 @app.get("/api/admin/generate-qr-token")
-async def generate_qr_token(request: Request, username: str = Depends(verify_admin)):
+async def generate_qr_token(request: Request, lifespan: int = 45, authorized: bool = Depends(verify_admin_header)):
     nonce = str(time.time())
-    token = serializer.dumps({"nonce": nonce})
+    token = serializer.dumps({"nonce": nonce, "lifespan": lifespan})
     
     base_url = str(request.base_url).rstrip("/")
     scan_url = f"{base_url}/scan?token={token}"
-    
-    return {"token": token, "scan_url": scan_url, "expires_in": QR_LIFESPAN_SECONDS}
+    return {"token": token, "scan_url": scan_url, "expires_in": lifespan}
 
 # 3. STUDENT: Scan QR and lock device
 @app.get("/scan")
 async def scan_qr(request: Request, token: str):
-    # Validate Token
     try:
-        data = serializer.loads(token, max_age=QR_LIFESPAN_SECONDS)
+        data = serializer.loads(token, max_age=86400)
+        nonce = float(data["nonce"])
+        lifespan = int(data.get("lifespan", 45))
+        
+        if time.time() - nonce > lifespan:
+            raise Exception("Expired")
     except Exception:
-        raise HTTPException(status_code=403, detail="QR Code Expired. Please wait for the screen to refresh and scan again.")
+        raise HTTPException(status_code=403, detail="QR Code Expired. Please scan the newest one on the screen.")
 
-    # Prevent double scanning
-    nonce = data["nonce"]
-    if nonce in consumed_tokens:
-        raise HTTPException(status_code=403, detail="This QR code was already scanned. Please scan the newest one on the screen.")
-    consumed_tokens.add(nonce)
+    if data["nonce"] in consumed_tokens:
+        raise HTTPException(status_code=403, detail="QR already scanned.")
+    consumed_tokens.add(data["nonce"])
 
-    # Issue device lock cookie
     client_ip = request.headers.get("X-Forwarded-For", request.client.host)
     device_session = serializer.dumps({"scanned_at": time.time(), "ip": client_ip})
     
     response = RedirectResponse(url="/login")
     response.set_cookie(key="device_session", value=device_session, httponly=True, max_age=300)
-    
     return response
 
-# 4. STUDENT: Trigger Google OAuth
+# 4. STUDENT: Login Trigger
 @app.get("/login")
 async def login(request: Request, device_session: str = Cookie(None)):
     if not device_session:
-        raise HTTPException(status_code=403, detail="Device not verified. You must scan the QR code first.")
-    
+        raise HTTPException(status_code=403, detail="Device not verified. Scan the QR code first.")
     redirect_uri = request.url_for('auth_callback')
     return await oauth.google.authorize_redirect(request, str(redirect_uri))
 
-# 5. STUDENT: Google Auth Callback & Record Attendance
+# 5. STUDENT: Google Auth Callback -> Show Form
 @app.get("/auth/callback", response_class=HTMLResponse)
 async def auth_callback(request: Request, device_session: str = Cookie(None)):
-    # Helper to render the status template
-    def render_status(message: str, success: bool = False, email: str = None):
+    def render_status(msg, success=False, email=None):
         return templates.TemplateResponse(
-            request=request,
-            name="status.html",
-            context={"request": request, "message": message, "success": success, "email": email}
+            request=request, 
+            name="status.html", 
+            context={"message": msg, "success": success, "email": email}
         )
 
-    # 1. Verify Device Session
     if not device_session:
-        return render_status("Invalid session. You must scan the QR code on the projector.", success=False)
+        return render_status("Invalid session.", success=False)
     
-    # 2. Process Google Auth
     try:
         token = await oauth.google.authorize_access_token(request)
         user = token.get('userinfo')
     except Exception:
-         return render_status("Google authentication failed or was cancelled.", success=False)
+        return render_status("Google authentication failed.", success=False)
     
-    if not user or not user.get('email'):
-        return render_status("Failed to fetch user email from Google.", success=False)
-        
     email = user.get('email')
     
-    # 3. Verify Domain
     if not email.endswith(ALLOWED_EMAIL_DOMAIN):
-        return render_status(f"Access Denied. Please log in using your {ALLOWED_EMAIL_DOMAIN} account.", success=False)
+        return render_status(f"Please use your {ALLOWED_EMAIL_DOMAIN} account.", success=False)
     
-    # 4. Record in DB
+    form_token = serializer.dumps({"email": email})
+    return templates.TemplateResponse(
+        request=request,
+        name="form.html", 
+        context={"email": email, "form_token": form_token, "form_url": GOOGLE_FORM_URL}
+    )
+
+# 6. STUDENT: Finalize Attendance (Changed to POST)
+@app.post("/finalize-attendance", response_class=HTMLResponse)
+async def finalize_attendance(request: Request, token: str):
+    def render_status(msg, success=False, email=None):
+        return templates.TemplateResponse(
+            request=request, 
+            name="status.html", 
+            context={"message": msg, "success": success, "email": email}
+        )
+
+    try:
+        data = serializer.loads(token, max_age=1800)
+        email = data["email"]
+    except Exception:
+        return render_status("Session expired. You took too long.", success=False)
+        
     try:
         conn = sqlite3.connect('attendance.db')
         c = conn.cursor()
         c.execute("INSERT INTO attendance (email) VALUES (?)", (email,))
         conn.commit()
     except sqlite3.IntegrityError:
-        return render_status("Attendance has already been marked for this account today.", success=True, email=email)
+        return render_status("Attendance already marked today.", success=True, email=email)
     finally:
         conn.close()
         
-    return render_status("Attendance marked successfully!", success=True, email=email)
+    return render_status("Form Submitted & Attendance Marked!", success=True, email=email)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

@@ -258,4 +258,4 @@ async def finalize_attendance(request: Request, token: str, form_submitted: str 
 if __name__ == "__main__":
     import uvicorn
     # Here is the 0.0.0.0 you are looking for!
-    uvicorn.run("main_2:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

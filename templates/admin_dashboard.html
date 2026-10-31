@@ -2,89 +2,589 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendance | Admin</title>
     <script src="https://cdn.rawgit.com/davidshimjs/qrcodejs/gh-pages/qrcode.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; text-align: center; margin: 0; padding: 2vh 20px; }
-        h1 { font-size: clamp(28px, 4vw, 48px); margin-top: 0; margin-bottom: 5px; }
-        #timer { font-size: clamp(18px, 3vw, 24px); color: #ff4757; font-weight: bold; margin-bottom: 2vh; }
-        #qr-wrapper { position: relative; margin: 0 auto; width: 90vw; max-width: 70vh; aspect-ratio: 1 / 1; }
-        #qr-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); border-radius: 20px; display: flex; justify-content: center; align-items: center; z-index: 10; }
-        #qr-overlay button { width: auto; padding: 20px 40px; font-size: 24px; background: #28a745; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; box-shadow: 0 10px 20px rgba(0,0,0,0.5); }
-        #qr-overlay button:hover { background: #218838; transform: scale(1.05); transition: 0.2s; }
-        #qr-container { background: white; padding: 2vmin; border-radius: 20px; width: 100%; height: 100%; box-sizing: border-box; display: flex; justify-content: center; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); transition: filter 0.3s ease; }
-        .blurred { filter: blur(15px); }
-        #qrcode { width: 100%; height: 100%; }
-        #qrcode img, #qrcode canvas { width: 100% !important; height: 100% !important; object-fit: contain; }
-        #stop-btn-container { display: none; margin-top: 30px; }
-        #stop-btn-container button { width: 100%; max-width: 400px; padding: 15px; background: #dc3545; color: white; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; font-weight: bold; }
-        #stop-btn-container button:hover { background: #c82333; }
-        .settings-panel { margin: 40px auto; padding: 20px; background: #2f3542; border-radius: 12px; display: block; max-width: 400px; width: 100%; box-sizing: border-box; }
-        .settings-panel h3 { margin-top: 0; }
-        .input-group { margin: 15px 0; text-align: left; }
-        .input-group label { display: block; margin-bottom: 8px; font-size: 14px; }
-        input[type="number"], input[type="url"], input[type="text"] { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #57606f; background: #1a1a1a; color: white; font-size: 16px; box-sizing: border-box; }
-        input:disabled { background: #353b48; color: #a4b0be; cursor: not-allowed; }
-        #login-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); display: flex; justify-content: center; align-items: center; z-index: 1000; }
-        .modal-content { background: #2f3542; padding: 40px; border-radius: 12px; width: 300px; box-sizing: border-box; }
-        input[type="password"] { width: 100%; padding: 12px; margin: 15px 0; border-radius: 6px; border: none; box-sizing: border-box; font-size: 16px; background: #1a1a1a; color: white; }
-        .modal-content button { width: 100%; padding: 12px; background: #3742fa; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }
-        .modal-content button:hover { background: #5352ed; }
-        #error-msg { color: #ff4757; font-size: 14px; display: none; margin-bottom: 10px; }
+        :root {
+            --bg: #0b1021;
+            --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 45%, #312e81 100%);
+            --card: rgba(255, 255, 255, 0.05);
+            --card-border: rgba(255, 255, 255, 0.2);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.35);
+            --primary-hover: #4f46e5;
+            --success: #22c55e;
+            --error: #ef4444;
+            --radius: 24px;
+            --transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg-gradient);
+            background-attachment: fixed;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(99, 102, 241, 0.14) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(139, 92, 246, 0.1) 0%, transparent 40%);
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 20px 80px;
+            position: relative;
+            z-index: 1;
+            width: 100%;
+        }
+
+        /* ---------- Typography ---------- */
+        h1 {
+            font-size: clamp(1.3rem, 3vw, 1.8rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            margin-bottom: 4px;
+            text-align: center;
+            background: linear-gradient(135deg, #fff 60%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: clamp(0.8rem, 1.5vw, 0.9rem);
+            text-align: center;
+            margin-bottom: 16px;
+            font-weight: 400;
+        }
+
+        /* ---------- Glass Card ---------- */
+        .glass {
+            background: var(--card);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1.5px solid var(--card-border);
+            border-radius: var(--radius);
+            box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.5);
+            padding: 36px 40px;
+        }
+
+        /* ---------- Login Modal ---------- */
+        #login-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(6, 8, 18, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.4s ease, visibility 0.4s ease;
+        }
+
+        #login-modal.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .modal-content {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            padding: 56px 48px;
+            border-radius: var(--radius);
+            width: 100%;
+            max-width: 440px;
+            text-align: center;
+            transform: translateY(24px);
+            transition: transform 0.5s ease, opacity 0.5s ease;
+            opacity: 0;
+        }
+
+        #login-modal:not(.hidden) .modal-content {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .modal-content h2 {
+            font-size: 1.75rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            letter-spacing: -0.02em;
+        }
+
+        .modal-content p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 32px;
+            line-height: 1.6;
+        }
+
+        .input-group {
+            margin-bottom: 24px;
+            text-align: left;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        input[type="password"] {
+            width: 100%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            border: 1px solid var(--card-border);
+            background: rgba(0, 0, 0, 0.3);
+            color: var(--text);
+            font-size: 1rem;
+            font-family: inherit;
+            transition: var(--transition);
+            outline: none;
+        }
+
+        input[type="password"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .modal-content button {
+            width: 100%;
+            padding: 16px;
+            border-radius: 16px;
+            border: none;
+            background: var(--primary);
+            color: white;
+            font-size: 1rem;
+            font-weight: 800;
+            font-family: inherit;
+            cursor: pointer;
+            transition: var(--transition);
+            letter-spacing: 0.02em;
+            box-shadow: 0 15px 35px -10px var(--primary-glow);
+        }
+
+        .modal-content button:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        .modal-content button:active { transform: translateY(0); }
+
+        #error-msg {
+            color: var(--error);
+            font-size: 0.85rem;
+            display: none;
+            margin-top: 12px;
+            font-weight: 500;
+        }
+
+        /* ---------- Dashboard Content ---------- */
+        #dashboard {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+            width: 100%;
+            align-self: stretch;
+        }
+
+        #dashboard.visible {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+        }
+
+        /* ---------- Countdown / Timer ---------- */
+        #timer {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.95rem, 2vw, 1.2rem);
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            letter-spacing: 0.05em;
+            text-align: center;
+        }
+
+        #countdown {
+            color: var(--primary);
+            text-shadow: 0 0 12px var(--primary-glow);
+        }
+
+        /* ---------- QR Section (centered, full QR visible, no clipping) ---------- */
+        .qr-section {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 40px;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin: 0;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            width: 100%;
+        }
+
+        #qr-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: min(640px, 85vw, 70vh);
+            aspect-ratio: 1 / 1;
+            background: #ffffff;
+            border: 2px solid var(--card-border);
+            border-radius: 40px;
+            box-shadow: 0 35px 70px -25px rgba(0,0,0,0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #qr-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: none;
+            border-radius: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 14px;
+            z-index: 10;
+            cursor: pointer;
+            transition: var(--transition);
+            padding: 40px 24px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        #qr-overlay:hover { background: rgba(15, 23, 42, 0.75); }
+
+        #qr-overlay .overlay-label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.02em;
+        }
+
+        #qr-overlay .overlay-hint {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+            max-width: 260px;
+        }
+
+        #qr-overlay button {
+            width: auto;
+            padding: 14px 36px;
+            font-size: 0.95rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-weight: 800;
+            font-family: inherit;
+            cursor: pointer;
+            box-shadow: 0 20px 40px -10px var(--primary-glow);
+            transition: var(--transition);
+            letter-spacing: 0.02em;
+            margin-top: 6px;
+        }
+
+        #qr-overlay button:hover { background: var(--primary-hover); transform: translateY(-1px); }
+
+        /* QR container: white square with padding so QR corners are never clipped */
+        #qr-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #ffffff;
+            border-radius: 32px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        #qr-container.blurred { filter: blur(18px) brightness(0.45); }
+
+        #qrcode {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #qrcode img, #qrcode canvas {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain;
+            display: block;
+        }
+
+        /* ---------- Stop Button ---------- */
+        #stop-btn-container {
+            width: 100%;
+            max-width: min(640px, 85vw, 70vh);
+            text-align: center;
+            display: none;
+        }
+
+        #stop-btn-container button {
+            width: 100%;
+            padding: 16px 24px;
+            background: var(--error);
+            color: white;
+            border: none;
+            border-radius: 16px;
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            box-shadow: 0 20px 40px -10px rgba(239, 68, 68, 0.35);
+            transition: var(--transition);
+            letter-spacing: 0.02em;
+        }
+
+        #stop-btn-container button:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+            box-shadow: 0 25px 45px -10px rgba(239, 68, 68, 0.45);
+        }
+
+        /* ---------- Settings Panel (centered, visible borders) ---------- */
+        .settings-panel {
+            max-width: min(680px, 92vw);
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .settings-panel h3 {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: var(--text);
+            letter-spacing: 0.02em;
+            text-align: center;
+        }
+
+        .input-group {
+            margin-bottom: 24px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            text-align: left;
+        }
+
+        .input-group small {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 6px;
+            line-height: 1.5;
+            text-align: left;
+        }
+
+        input[type="text"],
+        input[type="url"],
+        input[type="number"] {
+            width: 100%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            border: 1.5px solid rgba(255, 255, 255, 0.18);
+            background: rgba(0, 0, 0, 0.3);
+            color: var(--text);
+            font-size: 1rem;
+            font-family: inherit;
+            transition: var(--transition);
+            outline: none;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        input:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.15);
+            margin: 32px 0;
+        }
+
+        .panel-footer {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--card-border);
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-align: center;
+        }
+
+        /* ---------- Toast ---------- */
+        #toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(120px);
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            color: var(--text);
+            padding: 12px 20px;
+            border-radius: 14px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            box-shadow: 0 20px 40px -10px rgba(0,0,0,0.5);
+            z-index: 2000;
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease;
+            backdrop-filter: blur(10px);
+            white-space: nowrap;
+        }
+
+        #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+        /* ---------- Responsive ---------- */
+        @media (max-width: 640px) {
+            .page { padding: 24px 16px 70px; }
+            .modal-content { padding: 40px 24px; }
+            .glass { padding: 28px 24px; }
+            #qr-wrapper { max-width: min(520px, 85vw, 65vh); border-radius: 32px; }
+            #qr-overlay { border-radius: 32px; padding: 32px 20px; }
+            #qr-container { border-radius: 24px; padding: 16px; }
+        }
     </style>
 </head>
 <body>
-    <div id="login-modal">
-        <div class="modal-content">
-            <h2>Admin Access</h2>
-            <p id="error-msg">Incorrect password.</p>
-            <input type="password" id="admin-pass" placeholder="Enter Admin Password">
-            <button onclick="attemptLogin()">Unlock Dashboard</button>
+    <div class="page">
+        <!-- Login screen -->
+        <div id="login-modal">
+            <div class="modal-content">
+                <h2>Admin Access</h2>
+                <p>Enter the administrator password to unlock the dashboard.</p>
+                <div id="error-msg">Incorrect password. Please try again.</div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="admin-pass" placeholder="••••••••" autocomplete="off">
+                </div>
+                <button onclick="attemptLogin()">Unlock Dashboard</button>
+            </div>
+        </div>
+
+        <!-- Dashboard content -->
+        <div id="dashboard">
+            <h1>Attendance</h1>
+            <div class="subtitle">Admin control panel &nbsp;·&nbsp; QR-based check-in</div>
+
+            <div id="timer">Session refreshes in <span id="countdown">--</span>s</div>
+
+            <div class="qr-section">
+                <div class="section-title">Scan to Mark Attendance</div>
+                <div id="qr-wrapper">
+                    <div id="qr-overlay">
+                        <div class="overlay-label">Start Session</div>
+                        <div class="overlay-hint">Generate QR code for students to scan</div>
+                        <button onclick="startSession()">▶ Start Session</button>
+                    </div>
+                    <div id="qr-container" class="blurred">
+                        <div id="qrcode"></div>
+                    </div>
+                </div>
+                <div id="stop-btn-container">
+                    <button onclick="stopSession()">⏹ Stop Session &amp; Save CSV</button>
+                </div>
+            </div>
+
+            <div class="glass settings-panel">
+                <h3>Session Configuration</h3>
+
+                <div class="input-group">
+                    <label>WiFi IP Prefix (Optional)</label>
+                    <input type="text" id="ip-prefix-input" placeholder="e.g. 14.139.">
+                    <small>When set, blocks 5G and home WiFi connections.</small>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="input-group">
+                    <label>Google Form Embed URL (Optional)</label>
+                    <input type="url" id="form-url-input" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
+                </div>
+
+                <div class="input-group">
+                    <label>Form Timeout Limit (Seconds)</label>
+                    <input type="number" id="timeout-input" value="300" min="30" disabled>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="input-group">
+                    <label>QR Refresh Rate (Seconds)</label>
+                    <input type="number" id="lifespan-input" value="45" min="10" max="300">
+                </div>
+
+                <div class="panel-footer">
+                    Settings apply when you start the session.
+                </div>
+            </div>
         </div>
     </div>
 
-    <h1>Scan to Mark Attendance</h1>
-    <div id="timer">Refreshing in <span id="countdown">--</span>s</div>
-    
-    <div id="qr-wrapper">
-        <div id="qr-overlay">
-            <button onclick="startSession()">▶ Start Session</button>
-        </div>
-        <div id="qr-container" class="blurred">
-            <div id="qrcode"></div>
-        </div>
-    </div>
-
-    <div id="stop-btn-container">
-        <button onclick="stopSession()">⏹ Stop Session & Save CSV</button>
-    </div>
-
-    <div class="settings-panel">
-        <h3>Session Configuration</h3>
-        
-        <div class="input-group">
-            <label>Required WiFi IP Prefix (Optional)</label>
-            <input type="text" id="ip-prefix-input" placeholder="e.g. 14.139. OR leave blank">
-            <p style="font-size: 11px; color: #a4b0be; margin-top: 5px; margin-bottom: 0;">If set, blocks 5G and home WiFi connections.</p>
-        </div>
-
-        <div class="input-group" style="margin-top: 25px; border-top: 1px solid #57606f; padding-top: 15px;">
-            <label>Google Form Embed URL (Optional)</label>
-            <input type="url" id="form-url-input" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
-        </div>
-        
-        <div class="input-group">
-            <label>Form Timeout Limit (Seconds)</label>
-            <input type="number" id="timeout-input" value="300" min="30" disabled>
-        </div>
-
-        <div class="input-group" style="margin-top: 25px; border-top: 1px solid #57606f; padding-top: 15px;">
-            <label>QR Refresh Rate (Seconds)</label>
-            <input type="number" id="lifespan-input" value="45" min="10" max="300">
-        </div>
-    </div>
+    <div id="toast"></div>
 
     <script>
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.borderLeft = '4px solid var(--primary)';
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
         let adminPassword = "";
         let refreshInterval = null;
         let countdownInterval = null;
@@ -96,29 +596,44 @@
 
         function attemptLogin() {
             adminPassword = document.getElementById('admin-pass').value;
-            fetchToken(true);
+            if (!adminPassword) {
+                document.getElementById('error-msg').style.display = 'block';
+                return;
+            }
+            unlockDashboard();
+        }
+
+        function unlockDashboard() {
+            document.getElementById('login-modal').classList.add('hidden');
+            document.getElementById('dashboard').classList.add('visible');
+            document.getElementById('error-msg').style.display = 'none';
+            showToast('Welcome back.');
         }
 
         async function startSession() {
             const formUrl = document.getElementById('form-url-input').value;
             const timeout = document.getElementById('timeout-input').value || 300;
             const allowedIp = document.getElementById('ip-prefix-input').value;
-            
+
             try {
                 const response = await fetch('/api/admin/start', {
                     method: 'POST',
                     headers: { 'X-Admin-Password': adminPassword, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ form_url: formUrl, timeout: parseInt(timeout), allowed_ip: allowedIp })
                 });
-                
+
                 if (response.ok) {
                     document.getElementById('qr-overlay').style.display = 'none';
                     document.getElementById('qr-container').classList.remove('blurred');
                     document.getElementById('stop-btn-container').style.display = 'block';
-                    fetchToken(); 
+                    fetchToken();
+                    showToast('Session started.');
+                } else {
+                    showToast('Start failed. Check your password.', 'error');
                 }
             } catch (e) {
                 console.error("Failed to start session.");
+                showToast('Something went wrong.', 'error');
             }
         }
 
@@ -130,7 +645,7 @@
                     method: 'POST',
                     headers: { 'X-Admin-Password': adminPassword }
                 });
-                
+
                 if (response.ok) {
                     const blob = await response.blob();
                     const url = window.URL.createObjectURL(blob);
@@ -146,20 +661,24 @@
                     document.body.appendChild(a);
                     a.click();
                     window.URL.revokeObjectURL(url);
-                    
+
                     clearInterval(refreshInterval);
                     clearInterval(countdownInterval);
                     document.getElementById('countdown').innerText = "--";
                     document.getElementById('qr-overlay').style.display = 'flex';
                     document.getElementById('qr-container').classList.add('blurred');
                     document.getElementById('stop-btn-container').style.display = 'none';
+                    showToast('Session stopped. Attendance exported.');
+                } else {
+                    showToast('Stop failed. Check your password.', 'error');
                 }
             } catch (e) {
                 console.error("Failed to stop session.");
+                showToast('Something went wrong.', 'error');
             }
         }
 
-        async function fetchToken(isInitialLogin = false) {
+        async function fetchToken() {
             const lifespan = document.getElementById('lifespan-input').value || 45;
             try {
                 const response = await fetch(`/api/admin/generate-qr-token?lifespan=${lifespan}`, {
@@ -167,29 +686,29 @@
                 });
 
                 if (response.status === 401) {
-                    document.getElementById('login-modal').style.display = 'flex';
-                    if (!isInitialLogin) document.getElementById('error-msg').style.display = 'block';
+                    document.getElementById('error-msg').style.display = 'block';
                     clearInterval(refreshInterval);
                     clearInterval(countdownInterval);
                     return;
                 } else if (response.status === 400) {
-                    document.getElementById('login-modal').style.display = 'none';
-                    return; 
+                    return;
                 }
 
                 const data = await response.json();
-                document.getElementById('login-modal').style.display = 'none';
+
                 document.getElementById('qr-overlay').style.display = 'none';
                 document.getElementById('qr-container').classList.remove('blurred');
                 document.getElementById('stop-btn-container').style.display = 'block';
-                
+
                 document.getElementById('qrcode').innerHTML = "";
                 new QRCode(document.getElementById("qrcode"), {
                     text: data.scan_url, width: 1024, height: 1024,
                     colorDark : "#000000", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.H
                 });
                 startCountdown(data.expires_in);
-            } catch (err) { console.error("Error fetching token", err); }
+            } catch (err) {
+                console.error("Error fetching token", err);
+            }
         }
 
         function startCountdown(seconds) {
@@ -203,6 +722,10 @@
             }, 1000);
             refreshInterval = setTimeout(() => fetchToken(), seconds * 1000);
         }
+
+        document.getElementById('admin-pass').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') attemptLogin();
+        });
     </script>
 </body>
 </html>

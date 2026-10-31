@@ -4,80 +4,327 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Complete Attendance Form</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; margin: 0; padding: 0; text-align: center; }
-        #timer-bar { background: #ff4757; color: white; padding: 12px; font-weight: bold; font-size: 18px; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .header { background: #1a1a1a; color: white; padding: 20px; }
-        .header p { margin: 5px 0 0 0; color: #a4b0be; }
-        iframe { width: 100%; max-width: 800px; height: 70vh; border: none; margin-top: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: white; }
-        .action-bar { position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 20px; box-shadow: 0 -4px 12px rgba(0,0,0,0.1); display: flex; flex-direction: column; align-items: center; box-sizing: border-box; }
-        .content { padding-bottom: 120px; } 
-        #status-text { font-size: 16px; font-weight: bold; color: #333; margin: 0; }
-        .success-text { color: #28a745 !important; }
+        :root {
+            --bg: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+            --card: rgba(255, 255, 255, 0.05);
+            --card-border: rgba(255, 255, 255, 0.12);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.35);
+            --primary-hover: #4f46e5;
+            --success: #22c55e;
+            --error: #ef4444;
+            --radius: 24px;
+            --transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            background-attachment: fixed;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 20% 25%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+                radial-gradient(circle at 80% 75%, rgba(139, 92, 246, 0.12) 0%, transparent 45%);
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 72px 20px 120px;
+        }
+
+        /* ---------- Timer Bar ---------- */
+        #timer-bar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--card-border);
+            padding: 14px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            box-shadow: 0 10px 30px -10px rgba(0,0,0,0.4);
+        }
+
+        #timer-bar .label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        #timer-bar .time {
+            font-family: 'Space Mono', monospace;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .time .dot {
+            width: 8px; height: 8px;
+            background: var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--primary-glow);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.3); }
+        }
+
+        /* ---------- Header ---------- */
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            max-width: 720px;
+            width: 100%;
+        }
+
+        .header h2 {
+            font-size: clamp(1.2rem, 3vw, 1.6rem);
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #fff 60%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .email-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 500;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .email-chip strong {
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            font-size: 0.8rem;
+        }
+
+        /* ---------- Iframe ---------- */
+        #iframe-wrapper {
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto 24px;
+            position: relative;
+        }
+
+        iframe {
+            width: 100%;
+            height: 65vh;
+            min-height: 400px;
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+            background: white;
+            box-shadow: 0 30px 60px -20px rgba(0,0,0,0.5);
+            display: block;
+        }
+
+        /* ---------- Action Bar ---------- */
+        .action-bar {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid var(--card-border);
+            padding: 20px 24px;
+            z-index: 100;
+            box-shadow: 0 -20px 40px -10px rgba(0,0,0,0.4);
+        }
+
+        .action-bar-inner {
+            max-width: 720px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #status-text {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        .success-text { color: var(--success) !important; }
+
+        #confirm-btn {
+            display: none;
+            padding: 14px 36px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: 0 15px 35px -10px var(--primary-glow);
+            letter-spacing: 0.02em;
+        }
+
+        #confirm-btn:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        #confirm-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Hidden real form */
+        #finalize-form { display: none; }
+
+        /* ---------- Responsive ---------- */
+        @media (max-width: 640px) {
+            #timer-bar { padding: 12px 16px; flex-direction: column; gap: 6px; align-items: flex-start; }
+            .header h2 { font-size: 1.15rem; }
+            iframe { min-height: 350px; height: 55vh; }
+            .action-bar { padding: 16px; }
+        }
     </style>
 </head>
 <body>
-    <div id="timer-bar">
-        ⏳ Time Remaining: <span id="time-left">{{ timeout_seconds }}</span>s
-    </div>
+    <div class="page">
+        <div id="timer-bar">
+            <div class="label">⏳ Time Remaining</div>
+            <div class="time"><span id="time-left">{{ timeout_seconds }}</span>s <span class="dot"></span></div>
+        </div>
 
-    <div class="header">
-        <h2>Required Feedback Form</h2>
-        <p>Logged in as: <strong>{{ email }}</strong></p>
-    </div>
+        <div class="header">
+            <h2>Required Feedback Form</h2>
+            <div class="email-chip">Logged in as <strong>{{ email }}</strong></div>
+        </div>
 
-    <div class="content" id="iframe-wrapper">
-        <iframe id="google-form" src="{{ form_url }}" loading="lazy"></iframe>
-    </div>
+        <div id="iframe-wrapper">
+            <iframe id="google-form" src="{{ form_url }}" loading="lazy"></iframe>
+        </div>
 
-    <div class="action-bar">
-        <p id="status-text">⏳ Waiting for you to submit the form above...</p>
-        
-        <!-- The hidden POST form -->
-        <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST" style="display: none;">
-            <input type="hidden" name="form_submitted" id="form-submitted-input" value="False (Timeout)">
-        </form>
+        <div class="action-bar">
+            <div class="action-bar-inner">
+                <p id="status-text">Fill out the form above. The confirm button appears after submission.</p>
+                <button id="confirm-btn" onclick="finalizeAttendance(true)">✅ Confirm Attendance</button>
+                <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST">
+                    <input type="hidden" name="form_submitted" id="form-submitted-input" value="False (Timeout)">
+                </form>
+            </div>
+        </div>
     </div>
 
     <script>
+        let finalized = false;
+        let confirmed = false;
         let loadCount = 0;
         let timeLeft = parseInt("{{ timeout_seconds }}") || 300;
-        
+        const formToken = "{{ form_token }}";
+
         const iframe = document.getElementById('google-form');
         const statusText = document.getElementById('status-text');
-        const form = document.getElementById('finalize-form');
         const timerSpan = document.getElementById('time-left');
         const formStatusInput = document.getElementById('form-submitted-input');
+        const confirmBtn = document.getElementById('confirm-btn');
+        const finalizeForm = document.getElementById('finalize-form');
+
+        async function confirmFormSubmission() {
+            if (confirmed) return;
+            try {
+                const resp = await fetch('/api/form/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'token=' + encodeURIComponent(formToken)
+                });
+                if (resp.ok) {
+                    confirmed = true;
+                    clearInterval(countdown);
+                    statusText.innerText = "✅ Form submitted! You can now confirm your attendance.";
+                    statusText.classList.add("success-text");
+                    confirmBtn.style.display = 'inline-block';
+                }
+            } catch (e) {
+                console.error("Confirm failed", e);
+            }
+        }
+
+        function finalizeAttendance(submitted) {
+            if (finalized) return;
+            finalized = true;
+
+            clearInterval(countdown);
+            confirmBtn.disabled = true;
+
+            formStatusInput.value = submitted ? "True" : "False (Timeout)";
+            finalizeForm.submit();
+        }
 
         const countdown = setInterval(() => {
             timeLeft--;
             timerSpan.innerText = timeLeft;
-            
+
+            if (timeLeft <= 30) {
+                document.getElementById('timer-bar').style.background = 'rgba(127, 29, 29, 0.7)';
+            }
+
             if (timeLeft <= 0) {
                 clearInterval(countdown);
                 document.getElementById('iframe-wrapper').style.display = 'none';
-                document.getElementById('timer-bar').style.background = '#333';
-                document.getElementById('timer-bar').innerText = "Time Expired";
-                
-                statusText.innerText = "⏳ Time's up! Closing form and marking attendance...";
+                document.getElementById('timer-bar').innerHTML =
+                    '<div class="label">⏳ Time Remaining</div><div class="time" style="color:#ef4444">Time Expired</div>';
+                statusText.innerText = "Time's up! Finalizing your attendance…";
                 statusText.classList.add("success-text");
-                
-                // formStatusInput remains "False (Timeout)"
-                form.submit();
+                finalizeAttendance(false);
             }
         }, 1000);
 
         iframe.onload = function() {
             loadCount++;
-            
-            if (loadCount === 2) {
-                clearInterval(countdown); 
-                statusText.innerText = "✅ Form submitted! Finalizing your attendance...";
-                statusText.classList.add("success-text");
-                
-                // Update to True because they actually submitted it
-                formStatusInput.value = "True";
-                form.submit();
+            if (loadCount >= 2) {
+                confirmFormSubmission();
             }
         };
     </script>

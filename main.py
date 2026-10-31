@@ -208,6 +208,27 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
         "timeout_seconds": session_state["timeout"]
     })
 
+# Track which form tokens have been confirmed as submitted
+form_confirmed = set()
+
+@app.post("/api/form/confirm")
+async def confirm_form(token: str = Form(...)):
+    try:
+        data = serializer.loads(token, max_age=1800)
+        form_confirmed.add(data["email"])
+        return {"status": "confirmed"}
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+@app.post("/api/form/status")
+async def form_status(token: str = Form(...)):
+    try:
+        data = serializer.loads(token, max_age=1800)
+        confirmed = data["email"] in form_confirmed
+        return {"confirmed": confirmed}
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
 # Form validation requires python-multipart
 @app.post("/finalize-attendance", response_class=HTMLResponse)
 async def finalize_attendance(request: Request, token: str, form_submitted: str = Form("False (Unknown)")):

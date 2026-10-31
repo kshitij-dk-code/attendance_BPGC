@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException, Cookie, Depends, Form, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from itsdangerous import URLSafeTimedSerializer
@@ -45,6 +45,9 @@ oauth.register(
 if not os.path.exists("templates"):
     os.makedirs("templates")
 templates = Jinja2Templates(directory="templates")
+
+def render_status(request, msg, success=False, email=None):
+    return templates.TemplateResponse(request=request, name="status.html", context={"message": msg, "success": success, "email": email})
 
 def verify_admin_header(request: Request):
     auth_header = request.headers.get("X-Admin-Password")
@@ -146,42 +149,84 @@ async def check_ip(request: Request):
 @app.get("/scan")
 async def scan_qr(request: Request, token: str):
     if not session_state["is_active"]:
-        raise HTTPException(status_code=403, detail="The attendance session is closed.")
-    
-    # 1. Check WiFi Network Requirement
+        return render_status(request, "The attendance session is closed. Please ask your instructor to start a new session.")
+
     client_ip = get_client_ip(request)
-    allowed_ip = session_state.get("allowed_ip")
-    if allowed_ip and not client_ip.startswith(allowed_ip):
-        raise HTTPException(status_code=403, detail=f"Network Denied. You must connect to the correct WiFi network. Your IP is {client_ip}")
-        
+    allowed_ip = (session_state.get("allowed_ip") or "").strip()
+
+    # Validate the QR token
     try:
         data = serializer.loads(token, max_age=86400)
         if time.time() - float(data["nonce"]) > int(data.get("lifespan", 45)):
             raise Exception("Expired")
     except Exception:
-        raise HTTPException(status_code=403, detail="QR Code Expired. Please scan the newest one.")
+        return render_status(request, "QR Code expired. Please scan the newest QR code shown on screen.")
 
     if data["nonce"] in consumed_tokens:
-        raise HTTPException(status_code=403, detail="QR already scanned.")
+        return render_status(request, "This QR code has already been scanned. Please scan the newest one.")
     consumed_tokens.add(data["nonce"])
 
-    # 2. Lock the Device Fingerprint
+    # Lock the Device Fingerprint
     device_id = request.cookies.get("device_id")
     if not device_id:
         device_id = secrets.token_hex(16)
 
+    # WiFi restriction: verify the phone's LOCAL IP (client-side, since the
+    # server only sees the public/NAT'd address) before issuing cookies.
+    if allowed_ip:
+        net_token = serializer.dumps({"device_id": device_id, "ip": client_ip, "purpose": "network_check"})
+        return templates.TemplateResponse(request=request, name="network_check.html", context={
+            "net_token": net_token,
+            "allowed_prefix": allowed_ip
+        })
+
     device_session = serializer.dumps({"scanned_at": time.time(), "ip": client_ip, "device_id": device_id})
     response = RedirectResponse(url="/login")
     response.set_cookie(key="device_session", value=device_session, httponly=True, max_age=300)
-    
+
     # Make the device fingerprint permanent so they cannot pass the phone to a friend
-    response.set_cookie(key="device_id", value=device_id, httponly=True, max_age=31536000) 
+    response.set_cookie(key="device_id", value=device_id, httponly=True, max_age=31536000)
     return response
+
+@app.post("/api/verify-network")
+async def verify_network(net_token: str = Form(...), local_ip: str = Form("")):
+    """Verify the phone's local WiFi IP (detected via WebRTC) against the
+    allowed prefix. Falls back to the public IP the server observed."""
+    if not session_state["is_active"]:
+        return JSONResponse({"ok": False, "message": "The attendance session has been closed."})
+
+    try:
+        data = serializer.loads(net_token, max_age=300)
+        device_id = data["device_id"]
+        public_ip = data["ip"]
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Network check expired. Please scan the QR code again."})
+
+    allowed_ip = (session_state.get("allowed_ip") or "").strip()
+    if allowed_ip:
+        local_ip = (local_ip or "").strip()
+        local_ok = bool(local_ip) and local_ip.startswith(allowed_ip)
+        public_ok = public_ip.startswith(allowed_ip)
+        if not (local_ok or public_ok):
+            return JSONResponse({
+                "ok": False,
+                "message": "You must be connected to the required WiFi network to mark attendance.",
+                "expected": allowed_ip,
+                "local_ip": local_ip or "not detected",
+                "public_ip": public_ip
+            })
+
+    # Network verified — issue the device cookies
+    device_session = serializer.dumps({"scanned_at": time.time(), "ip": public_ip, "device_id": device_id})
+    resp = JSONResponse({"ok": True, "redirect": "/login"})
+    resp.set_cookie(key="device_session", value=device_session, httponly=True, max_age=300)
+    resp.set_cookie(key="device_id", value=device_id, httponly=True, max_age=31536000)
+    return resp
 
 @app.get("/login")
 async def login(request: Request, device_session: str = Cookie(None)):
     if not device_session:
-        raise HTTPException(status_code=403, detail="Device not verified.")
+        return render_status(request, "Device not verified. Please scan the QR code again.")
     return await oauth.google.authorize_redirect(request, str(request.url_for('auth_callback')))
 
 @app.get("/auth/callback", response_class=HTMLResponse)

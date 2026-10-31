@@ -130,7 +130,7 @@ async def stop_session(authorized: bool = Depends(verify_admin_header)):
     )
 
 @app.get("/api/admin/generate-qr-token")
-async def generate_qr_token(request: Request, lifespan: int = 45, authorized: bool = Depends(verify_admin_header)):
+async def generate_qr_token(request: Request, lifespan: int = 15, authorized: bool = Depends(verify_admin_header)):
     if not session_state["is_active"]:
         raise HTTPException(status_code=400, detail="Session not active")
         
@@ -161,7 +161,7 @@ async def scan_qr(request: Request, token: str):
     # Validate the QR token
     try:
         data = serializer.loads(token, max_age=86400)
-        if time.time() - float(data["nonce"]) > int(data.get("lifespan", 45)):
+        if time.time() - float(data["nonce"]) > int(data.get("lifespan", 15)):
             raise Exception("Expired")
     except Exception:
         return render_status(request, "QR Code expired. Please scan the newest QR code shown on screen.")

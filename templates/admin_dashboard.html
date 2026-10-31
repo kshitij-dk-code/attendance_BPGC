@@ -5,86 +5,35 @@
     <title>Admin Dashboard</title>
     <script src="https://cdn.rawgit.com/davidshimjs/qrcodejs/gh-pages/qrcode.min.js"></script>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #1a1a1a; 
-            color: white; 
-            text-align: center; 
-            margin: 0; 
-            padding: 2vh 20px; 
-        }
-        
-        h1 { 
-            font-size: clamp(28px, 4vw, 48px); /* Scales font slightly on smaller screens */
-            margin-top: 0;
-            margin-bottom: 5px; 
-        }
-        
-        #timer { 
-            font-size: clamp(18px, 3vw, 24px); 
-            color: #ff4757; 
-            font-weight: bold; 
-            margin-bottom: 2vh; 
-        }
-
-        /* QR Code Section - Maximized for Projectors */
-        #qr-container { 
-            background: white; 
-            padding: 2vmin; 
-            border-radius: 20px; 
-            margin: 0 auto;
-            /* Forces it to take up 90% of screen width, OR 70% of screen height (whichever is smaller) */
-            width: 90vw; 
-            max-width: 70vh; 
-            aspect-ratio: 1 / 1; 
-            box-sizing: border-box;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        }
-
-        #qrcode {
-            width: 100%;
-            height: 100%;
-        }
-
-        /* Override qrcode.js hardcoded pixel sizes to make it fluid */
-        #qrcode img, #qrcode canvas {
-            width: 100% !important;
-            height: 100% !important;
-            object-fit: contain;
-        }
-        
-        /* Settings Section - Pushed down below */
-        .settings-panel { 
-            margin: 8vh auto 40px auto; 
-            padding: 20px; 
-            background: #2f3542; 
-            border-radius: 12px; 
-            display: block; 
-            max-width: 400px; 
-            width: 100%; 
-            box-sizing: border-box;
-        }
-        
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; text-align: center; margin: 0; padding: 2vh 20px; }
+        h1 { font-size: clamp(28px, 4vw, 48px); margin-top: 0; margin-bottom: 5px; }
+        #timer { font-size: clamp(18px, 3vw, 24px); color: #ff4757; font-weight: bold; margin-bottom: 2vh; }
+        #qr-wrapper { position: relative; margin: 0 auto; width: 90vw; max-width: 70vh; aspect-ratio: 1 / 1; }
+        #qr-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); border-radius: 20px; display: flex; justify-content: center; align-items: center; z-index: 10; }
+        #qr-overlay button { width: auto; padding: 20px 40px; font-size: 24px; background: #28a745; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; box-shadow: 0 10px 20px rgba(0,0,0,0.5); }
+        #qr-overlay button:hover { background: #218838; transform: scale(1.05); transition: 0.2s; }
+        #qr-container { background: white; padding: 2vmin; border-radius: 20px; width: 100%; height: 100%; box-sizing: border-box; display: flex; justify-content: center; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); transition: filter 0.3s ease; }
+        .blurred { filter: blur(15px); }
+        #qrcode { width: 100%; height: 100%; }
+        #qrcode img, #qrcode canvas { width: 100% !important; height: 100% !important; object-fit: contain; }
+        #stop-btn-container { display: none; margin-top: 30px; }
+        #stop-btn-container button { width: 100%; max-width: 400px; padding: 15px; background: #dc3545; color: white; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; font-weight: bold; }
+        #stop-btn-container button:hover { background: #c82333; }
+        .settings-panel { margin: 40px auto; padding: 20px; background: #2f3542; border-radius: 12px; display: block; max-width: 400px; width: 100%; box-sizing: border-box; }
         .settings-panel h3 { margin-top: 0; }
         .input-group { margin: 15px 0; text-align: left; }
         .input-group label { display: block; margin-bottom: 8px; font-size: 14px; }
-        input[type="number"] { width: 100%; padding: 10px; border-radius: 6px; border: none; background: #1a1a1a; color: white; font-size: 16px; box-sizing: border-box; }
-        
-        /* Password Modal */
+        input[type="number"], input[type="url"], input[type="text"] { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #57606f; background: #1a1a1a; color: white; font-size: 16px; box-sizing: border-box; }
+        input:disabled { background: #353b48; color: #a4b0be; cursor: not-allowed; }
         #login-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); display: flex; justify-content: center; align-items: center; z-index: 1000; }
         .modal-content { background: #2f3542; padding: 40px; border-radius: 12px; width: 300px; box-sizing: border-box; }
         input[type="password"] { width: 100%; padding: 12px; margin: 15px 0; border-radius: 6px; border: none; box-sizing: border-box; font-size: 16px; background: #1a1a1a; color: white; }
-        button { width: 100%; padding: 12px; background: #3742fa; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #5352ed; }
+        .modal-content button { width: 100%; padding: 12px; background: #3742fa; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }
+        .modal-content button:hover { background: #5352ed; }
         #error-msg { color: #ff4757; font-size: 14px; display: none; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-
-    <!-- Password Modal -->
     <div id="login-modal">
         <div class="modal-content">
             <h2>Admin Access</h2>
@@ -94,22 +43,45 @@
         </div>
     </div>
 
-    <!-- Main Content -->
     <h1>Scan to Mark Attendance</h1>
-    <div id="timer">Refreshing in <span id="countdown">45</span>s</div>
+    <div id="timer">Refreshing in <span id="countdown">--</span>s</div>
     
-    <div id="qr-container">
-        <div id="qrcode"></div>
+    <div id="qr-wrapper">
+        <div id="qr-overlay">
+            <button onclick="startSession()">▶ Start Session</button>
+        </div>
+        <div id="qr-container" class="blurred">
+            <div id="qrcode"></div>
+        </div>
     </div>
 
-    <!-- Settings -->
+    <div id="stop-btn-container">
+        <button onclick="stopSession()">⏹ Stop Session & Save CSV</button>
+    </div>
+
     <div class="settings-panel">
-        <h3>Dashboard Settings</h3>
+        <h3>Session Configuration</h3>
+        
         <div class="input-group">
-            <label>QR Validity Duration (Seconds)</label>
+            <label>Required WiFi IP Prefix (Optional)</label>
+            <input type="text" id="ip-prefix-input" placeholder="e.g. 14.139. OR leave blank">
+            <p style="font-size: 11px; color: #a4b0be; margin-top: 5px; margin-bottom: 0;">If set, blocks 5G and home WiFi connections.</p>
+        </div>
+
+        <div class="input-group" style="margin-top: 25px; border-top: 1px solid #57606f; padding-top: 15px;">
+            <label>Google Form Embed URL (Optional)</label>
+            <input type="url" id="form-url-input" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
+        </div>
+        
+        <div class="input-group">
+            <label>Form Timeout Limit (Seconds)</label>
+            <input type="number" id="timeout-input" value="300" min="30" disabled>
+        </div>
+
+        <div class="input-group" style="margin-top: 25px; border-top: 1px solid #57606f; padding-top: 15px;">
+            <label>QR Refresh Rate (Seconds)</label>
             <input type="number" id="lifespan-input" value="45" min="10" max="300">
         </div>
-        <p style="font-size: 12px; color: #a4b0be; margin-bottom: 0;">Changes take effect on the next refresh.</p>
     </div>
 
     <script>
@@ -117,14 +89,78 @@
         let refreshInterval = null;
         let countdownInterval = null;
 
+        function toggleTimeout() {
+            const formUrl = document.getElementById('form-url-input').value;
+            document.getElementById('timeout-input').disabled = (formUrl.trim() === "");
+        }
+
         function attemptLogin() {
             adminPassword = document.getElementById('admin-pass').value;
             fetchToken(true);
         }
 
+        async function startSession() {
+            const formUrl = document.getElementById('form-url-input').value;
+            const timeout = document.getElementById('timeout-input').value || 300;
+            const allowedIp = document.getElementById('ip-prefix-input').value;
+            
+            try {
+                const response = await fetch('/api/admin/start', {
+                    method: 'POST',
+                    headers: { 'X-Admin-Password': adminPassword, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ form_url: formUrl, timeout: parseInt(timeout), allowed_ip: allowedIp })
+                });
+                
+                if (response.ok) {
+                    document.getElementById('qr-overlay').style.display = 'none';
+                    document.getElementById('qr-container').classList.remove('blurred');
+                    document.getElementById('stop-btn-container').style.display = 'block';
+                    fetchToken(); 
+                }
+            } catch (e) {
+                console.error("Failed to start session.");
+            }
+        }
+
+        async function stopSession() {
+            if (!confirm("End the session? This downloads the attendance list and invalidates current QR codes.")) return;
+
+            try {
+                const response = await fetch('/api/admin/stop', {
+                    method: 'POST',
+                    headers: { 'X-Admin-Password': adminPassword }
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    const disposition = response.headers.get('Content-Disposition');
+                    let filename = "Attendance.csv";
+                    if (disposition && disposition.indexOf('filename=') !== -1) {
+                        filename = disposition.split('filename=')[1].replace(/['"]/g, '');
+                    }
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    
+                    clearInterval(refreshInterval);
+                    clearInterval(countdownInterval);
+                    document.getElementById('countdown').innerText = "--";
+                    document.getElementById('qr-overlay').style.display = 'flex';
+                    document.getElementById('qr-container').classList.add('blurred');
+                    document.getElementById('stop-btn-container').style.display = 'none';
+                }
+            } catch (e) {
+                console.error("Failed to stop session.");
+            }
+        }
+
         async function fetchToken(isInitialLogin = false) {
             const lifespan = document.getElementById('lifespan-input').value || 45;
-            
             try {
                 const response = await fetch(`/api/admin/generate-qr-token?lifespan=${lifespan}`, {
                     headers: { 'X-Admin-Password': adminPassword }
@@ -136,43 +172,35 @@
                     clearInterval(refreshInterval);
                     clearInterval(countdownInterval);
                     return;
+                } else if (response.status === 400) {
+                    document.getElementById('login-modal').style.display = 'none';
+                    return; 
                 }
 
                 const data = await response.json();
                 document.getElementById('login-modal').style.display = 'none';
+                document.getElementById('qr-overlay').style.display = 'none';
+                document.getElementById('qr-container').classList.remove('blurred');
+                document.getElementById('stop-btn-container').style.display = 'block';
                 
-                // Clear old QR
                 document.getElementById('qrcode').innerHTML = "";
-                
-                // Generate a massive 1024x1024 high-res QR code (CSS will scale it perfectly)
                 new QRCode(document.getElementById("qrcode"), {
-                    text: data.scan_url,
-                    width: 1024,
-                    height: 1024,
-                    colorDark : "#000000",
-                    colorLight : "#ffffff",
-                    correctLevel : QRCode.CorrectLevel.H
+                    text: data.scan_url, width: 1024, height: 1024,
+                    colorDark : "#000000", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.H
                 });
-
                 startCountdown(data.expires_in);
-
-            } catch (err) {
-                console.error("Error fetching token", err);
-            }
+            } catch (err) { console.error("Error fetching token", err); }
         }
 
         function startCountdown(seconds) {
             clearInterval(refreshInterval);
             clearInterval(countdownInterval);
-            
             let timeLeft = seconds;
             document.getElementById('countdown').innerText = timeLeft;
-            
             countdownInterval = setInterval(() => {
                 timeLeft--;
                 document.getElementById('countdown').innerText = timeLeft;
             }, 1000);
-
             refreshInterval = setTimeout(() => fetchToken(), seconds * 1000);
         }
     </script>

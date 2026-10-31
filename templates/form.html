@@ -6,52 +6,77 @@
     <title>Complete Attendance Form</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; margin: 0; padding: 0; text-align: center; }
-        .header { background: #1a1a1a; color: white; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #timer-bar { background: #ff4757; color: white; padding: 12px; font-weight: bold; font-size: 18px; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: #1a1a1a; color: white; padding: 20px; }
         .header p { margin: 5px 0 0 0; color: #a4b0be; }
-        iframe { width: 100%; max-width: 800px; height: 75vh; border: none; margin-top: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: white; }
-        
+        iframe { width: 100%; max-width: 800px; height: 70vh; border: none; margin-top: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: white; }
         .action-bar { position: fixed; bottom: 0; left: 0; width: 100%; background: white; padding: 20px; box-shadow: 0 -4px 12px rgba(0,0,0,0.1); display: flex; flex-direction: column; align-items: center; box-sizing: border-box; }
         .content { padding-bottom: 120px; } 
-        
         #status-text { font-size: 16px; font-weight: bold; color: #333; margin: 0; }
         .success-text { color: #28a745 !important; }
     </style>
 </head>
 <body>
+    <div id="timer-bar">
+        ⏳ Time Remaining: <span id="time-left">{{ timeout_seconds }}</span>s
+    </div>
+
     <div class="header">
-        <h2>Required Google Form</h2>
+        <h2>Required Feedback Form</h2>
         <p>Logged in as: <strong>{{ email }}</strong></p>
     </div>
 
-    <div class="content">
-        <!-- The ID and onload event are crucial here -->
+    <div class="content" id="iframe-wrapper">
         <iframe id="google-form" src="{{ form_url }}" loading="lazy"></iframe>
     </div>
 
     <div class="action-bar">
         <p id="status-text">⏳ Waiting for you to submit the form above...</p>
         
-        <!-- The hidden POST form. No buttons for the student to click. -->
-        <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST" style="display: none;"></form>
+        <!-- The hidden POST form -->
+        <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST" style="display: none;">
+            <input type="hidden" name="form_submitted" id="form-submitted-input" value="False (Timeout)">
+        </form>
     </div>
 
     <script>
         let loadCount = 0;
+        let timeLeft = parseInt("{{ timeout_seconds }}") || 300;
+        
         const iframe = document.getElementById('google-form');
         const statusText = document.getElementById('status-text');
         const form = document.getElementById('finalize-form');
+        const timerSpan = document.getElementById('time-left');
+        const formStatusInput = document.getElementById('form-submitted-input');
 
-        // This triggers every time the iframe loads a new URL
+        const countdown = setInterval(() => {
+            timeLeft--;
+            timerSpan.innerText = timeLeft;
+            
+            if (timeLeft <= 0) {
+                clearInterval(countdown);
+                document.getElementById('iframe-wrapper').style.display = 'none';
+                document.getElementById('timer-bar').style.background = '#333';
+                document.getElementById('timer-bar').innerText = "Time Expired";
+                
+                statusText.innerText = "⏳ Time's up! Closing form and marking attendance...";
+                statusText.classList.add("success-text");
+                
+                // formStatusInput remains "False (Timeout)"
+                form.submit();
+            }
+        }, 1000);
+
         iframe.onload = function() {
             loadCount++;
             
-            // Load 1: The blank form loading for the first time.
-            // Load 2: The Google Form "Thank you for submitting" page loading.
             if (loadCount === 2) {
+                clearInterval(countdown); 
                 statusText.innerText = "✅ Form submitted! Finalizing your attendance...";
                 statusText.classList.add("success-text");
                 
-                // Automatically submit the hidden POST request
+                // Update to True because they actually submitted it
+                formStatusInput.value = "True";
                 form.submit();
             }
         };

@@ -107,13 +107,19 @@ async def start_session(req: StartSessionRequest, authorized: bool = Depends(ver
 @app.post("/api/admin/stop")
 async def stop_session(authorized: bool = Depends(verify_admin_header)):
     session_state["is_active"] = False
-    
+
+    if not session_state["db_file"]:
+        raise HTTPException(status_code=400, detail="No session has been started yet")
+
     # Extract data from the session's specific DB file
-    conn = sqlite3.connect(session_state["db_file"])
-    c = conn.cursor()
-    c.execute("SELECT id, email, device_id, timestamp, form_submitted, ip_address FROM attendance")
-    rows = c.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect(session_state["db_file"])
+        c = conn.cursor()
+        c.execute("SELECT id, email, device_id, timestamp, form_submitted, ip_address FROM attendance")
+        rows = c.fetchall()
+        conn.close()
+    except sqlite3.OperationalError:
+        raise HTTPException(status_code=400, detail="Session database is not initialized")
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -315,18 +321,26 @@ async def finalize_attendance(request: Request, token: str, form_submitted: str 
         device_id = data["device_id"]
     except Exception:
         return render_status("Session expired.", success=False)
-        
+
+    # Reject when no session is running (db_file empty) or the admin already
+    # stopped it — otherwise sqlite3.connect("") silently creates a temp empty
+    # database and the INSERT explodes with "no such table: attendance" (500).
+    if not session_state["is_active"] or not session_state["db_file"]:
+        return render_status("The attendance session has been closed.", success=False, email=email)
+
     try:
         conn = sqlite3.connect(session_state["db_file"])
-        c = conn.cursor()
-        c.execute("INSERT INTO attendance (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)", 
-                  (email, device_id, form_submitted, get_client_ip(request)))
-        conn.commit()
+        try:
+            conn.execute("INSERT INTO attendance (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)",
+                         (email, device_id, form_submitted, get_client_ip(request)))
+            conn.commit()
+        finally:
+            conn.close()
     except sqlite3.IntegrityError:
         return render_status("Error: You or this device have already marked attendance for this session.", success=False, email=email)
-    finally:
-        conn.close()
-        
+    except sqlite3.OperationalError:
+        return render_status("The attendance session has been closed.", success=False, email=email)
+
     return render_status("Attendance Marked!", success=True, email=email)
     
 if __name__ == "__main__":

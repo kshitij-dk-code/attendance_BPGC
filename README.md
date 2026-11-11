@@ -13,8 +13,10 @@ step, no external database.
 
 ## Features
 
-- **Admin dashboard** (`/admin`) with client-side login gate
-  - Session config: Google Form URL, form timeout, WiFi IP restriction
+- **Admin dashboard** (`/admin`) with server-verified login (session cookie;
+  wrong password never sees the dashboard)
+  - Session config: Google Form URL, form timeout, WiFi IP restriction,
+    QR refresh rate — each pre-filled from an env default (see Configuration)
   - Live QR code that auto-refreshes every 45 s (configurable lifespan)
   - One-click start/stop; stop streams the session's attendance as **CSV**
   - Live "what IP does the server see" hint for configuring the WiFi check
@@ -61,6 +63,9 @@ pip install -r requirements.txt
 export ADMIN_PASSWORD="choose-a-strong-password"
 export YOUR_GOOGLE_CLIENT_ID="....apps.googleusercontent.com"
 export YOUR_GOOGLE_CLIENT_SECRET="...."
+# Optional Session Config pre-fills:
+# export DEFAULT_TIMER="45"               # QR refresh secs (blank -> 45)
+# export DEFAULT_FORM_URL="https://..."   # Google Form URL (blank -> none)
 
 # 3. Run
 uvicorn main:app --reload          # dev
@@ -86,10 +91,12 @@ All configuration is via environment variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ADMIN_PASSWORD` | `admin123` | Password for the admin dashboard (sent as `X-Admin-Password`) |
+| `ADMIN_PASSWORD` | `admin123` | Admin password — checked by `POST /api/admin/login` (sets a session cookie) or the `X-Admin-Password` header |
 | `YOUR_GOOGLE_CLIENT_ID` | `google_client_id_here` | Google OAuth client ID |
 | `YOUR_GOOGLE_CLIENT_SECRET` | `google_client_secret_here` | Google OAuth client secret |
 | `DEFAULT_ALLOWED_IP` | `10.20.1.92` | WiFi-IP prefix **pre-filled** in Session Config (editable/clearable per session) |
+| `DEFAULT_TIMER` | *(blank → `45`)* | QR refresh rate (secs) **pre-filled** in Session Config; blank/non-numeric falls back to 45 |
+| `DEFAULT_FORM_URL` | *(blank)* | Google Form URL **pre-filled** in Session Config; blank stays blank (no form step) |
 | `ALLOWED_EMAIL_DOMAIN` | `@goa.bits-pilani.ac.in` | *(set in `main.py`)* which Google accounts may mark attendance |
 | `SECRET_KEY` | *(set in `main.py`)* | Signs tokens & sessions — **change for production** |
 
@@ -101,13 +108,19 @@ All configuration is via environment variables:
 ## Usage
 
 ### Instructor
-1. Open `/admin`, enter the admin password.
-2. Fill Session Config:
-   - **Google Form URL** — leave empty to skip the form step entirely.
-   - **Form Timeout** — seconds a student gets to fill the form.
+1. Open `/admin`, enter the admin password. A wrong password stays on the
+   login screen — the dashboard HTML (and its prefills) is only served
+   after the server verifies the password.
+2. Fill Session Config (env defaults are pre-filled where set):
+   - **Google Form URL** — from `DEFAULT_FORM_URL`; leave empty to skip
+     the form step entirely.
+   - **Form Timeout** — seconds a student gets to fill the form (enabled
+     once a form URL is present).
    - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it, or
      clear the field to disable the network restriction.
-3. Click **Start Session** — the QR appears and refreshes every 45 s.
+   - **QR Refresh Rate** — from `DEFAULT_TIMER` (falls back to 45 s).
+3. Click **Start Session** — the QR appears and refreshes at the configured
+   rate (45 s by default).
 4. Project the QR. Students scan → Google sign-in → (form) → done.
 5. **Stop Session** downloads `Attendance_....csv`.
 
@@ -139,11 +152,14 @@ All configuration is via environment variables:
 
 ## API reference
 
-All `/api/admin/*` endpoints require the `X-Admin-Password` header.
+Admin endpoints accept either the browser **session cookie** (set by
+`POST /api/admin/login`) or the **`X-Admin-Password` header** (scripts).
+`GET /admin` serves only the login screen until the session is authenticated.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET  | `/admin` | Admin dashboard HTML |
+| GET  | `/admin` | Admin dashboard HTML (login screen until authenticated) |
+| POST | `/api/admin/login` | Verify password → sets admin session cookie (401 on wrong password) |
 | POST | `/api/admin/start` | Start session → creates session DB |
 | POST | `/api/admin/stop` | Stop session → returns CSV, deactivates |
 | GET  | `/api/admin/generate-qr-token` | New signed QR token (`?lifespan=45`) |

@@ -22,6 +22,14 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
 DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
+# Default QR refresh timer (seconds) pre-filled in the Session Config.
+# Leave it blank to fall back to 45 secs (non-numeric values also fall back).
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
+if not DEFAULT_TIMER.isdigit():
+    DEFAULT_TIMER = "45"
+# Default Google Form embed URL pre-filled in the Session Config.
+# Leave it blank and it stays blank (sessions then run with no form).
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
@@ -53,11 +61,15 @@ templates = Jinja2Templates(directory="templates")
 def render_status(request, msg, success=False, email=None):
     return templates.TemplateResponse(request=request, name="status.html", context={"message": msg, "success": success, "email": email})
 
-def verify_admin_header(request: Request):
+def verify_admin(request: Request):
+    # Accept the X-Admin-Password header (scripts / load test) OR the
+    # authenticated admin session cookie issued by POST /api/admin/login.
     auth_header = request.headers.get("X-Admin-Password")
-    if not auth_header or not secrets.compare_digest(auth_header, ADMIN_PASSWORD):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
+    if auth_header and secrets.compare_digest(auth_header, ADMIN_PASSWORD):
+        return True
+    if request.session.get("admin_authed"):
+        return True
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 def get_client_ip(request: Request):
     # Try multiple headers in order of reliability behind proxies
@@ -74,12 +86,33 @@ class StartSessionRequest(BaseModel):
     timeout: int
     allowed_ip: str
 
+class LoginRequest(BaseModel):
+    password: str
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
-    return templates.TemplateResponse(request=request, name="admin_dashboard.html", context={"default_ip": DEFAULT_ALLOWED_IP})
+    # The dashboard HTML (with its prefilled default form URL / timer / IP) is
+    # only rendered for an authenticated admin session — everyone else gets
+    # the login screen alone.
+    authed = bool(request.session.get("admin_authed"))
+    context = {"authed": authed}
+    if authed:
+        context.update({
+            "default_ip": DEFAULT_ALLOWED_IP,
+            "default_timer": DEFAULT_TIMER,
+            "default_form_url": DEFAULT_FORM_URL,
+        })
+    return templates.TemplateResponse(request=request, name="admin_dashboard.html", context=context)
+
+@app.post("/api/admin/login")
+async def admin_login(req: LoginRequest, request: Request):
+    if not secrets.compare_digest(req.password, ADMIN_PASSWORD):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    request.session["admin_authed"] = True
+    return {"status": "ok"}
 
 @app.post("/api/admin/start")
-async def start_session(req: StartSessionRequest, authorized: bool = Depends(verify_admin_header)):
+async def start_session(req: StartSessionRequest, authorized: bool = Depends(verify_admin)):
     # Create a brand new DB file for this specific session
     db_filename = f"Attendance_{datetime.now().strftime('%Y_%m_%d_%H_%M')}.db"
     
@@ -105,7 +138,7 @@ async def start_session(req: StartSessionRequest, authorized: bool = Depends(ver
     return {"status": "started", "db_file": db_filename}
 
 @app.post("/api/admin/stop")
-async def stop_session(authorized: bool = Depends(verify_admin_header)):
+async def stop_session(authorized: bool = Depends(verify_admin)):
     session_state["is_active"] = False
 
     if not session_state["db_file"]:
@@ -136,7 +169,9 @@ async def stop_session(authorized: bool = Depends(verify_admin_header)):
     )
 
 @app.get("/api/admin/generate-qr-token")
-async def generate_qr_token(request: Request, lifespan: int = 15, authorized: bool = Depends(verify_admin_header)):
+async def generate_qr_token(request: Request, lifespan: int = None, authorized: bool = Depends(verify_admin)):
+    if lifespan is None:
+        lifespan = int(DEFAULT_TIMER)  # blank default timer falls back to 45
     if not session_state["is_active"]:
         raise HTTPException(status_code=400, detail="Session not active")
         
@@ -167,7 +202,7 @@ async def scan_qr(request: Request, token: str):
     # Validate the QR token
     try:
         data = serializer.loads(token, max_age=86400)
-        if time.time() - float(data["nonce"]) > int(data.get("lifespan", 15)):
+        if time.time() - float(data["nonce"]) > int(data.get("lifespan", 45)):
             raise Exception("Expired")
     except Exception:
         return render_status(request, "QR Code expired. Please scan the newest QR code shown on screen.")

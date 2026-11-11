@@ -501,6 +501,7 @@
 </head>
 <body>
     <div class="page">
+        {% if not authed %}
         <!-- Login screen -->
         <div id="login-modal">
             <div class="modal-content">
@@ -514,13 +515,15 @@
                 <button onclick="attemptLogin()">Unlock Dashboard</button>
             </div>
         </div>
+        {% endif %}
 
+        {% if authed %}
         <!-- Dashboard content -->
-        <div id="dashboard">
+        <div id="dashboard" class="visible">
             <h1>BPGC CS Attendance</h1>
             <div class="subtitle">By Kshitij Singh &nbsp;·&nbsp; QR-based check-in</div>
 
-            <div id="timer">QR Code refreshes in <span id="countdown">--</span>s</div>
+            <div id="timer">Session refreshes in <span id="countdown">--</span>s</div>
 
             <div class="qr-section">
                 <div class="section-title">Scan to Mark Attendance</div>
@@ -552,7 +555,7 @@
 
                 <div class="input-group">
                     <label>Google Form Embed URL (Optional)</label>
-                    <input type="url" id="form-url-input" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
+                    <input type="url" id="form-url-input" value="{{ default_form_url }}" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
                 </div>
 
                 <div class="input-group">
@@ -564,7 +567,7 @@
 
                 <div class="input-group">
                     <label>QR Refresh Rate (Seconds)</label>
-                    <input type="number" id="lifespan-input" value="45" min="10" max="300">
+                    <input type="number" id="lifespan-input" value="{{ default_timer }}" min="10" max="300">
                 </div>
 
                 <div class="panel-footer">
@@ -572,6 +575,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <div id="toast"></div>
@@ -585,7 +589,6 @@
             setTimeout(() => t.classList.remove('show'), 3000);
         }
 
-        let adminPassword = "";
         let refreshInterval = null;
         let countdownInterval = null;
 
@@ -594,21 +597,27 @@
             document.getElementById('timeout-input').disabled = (formUrl.trim() === "");
         }
 
-        function attemptLogin() {
-            adminPassword = document.getElementById('admin-pass').value;
-            if (!adminPassword) {
+        async function attemptLogin() {
+            const pass = document.getElementById('admin-pass').value;
+            if (!pass) {
                 document.getElementById('error-msg').style.display = 'block';
                 return;
             }
-            unlockDashboard();
-        }
-
-        function unlockDashboard() {
-            document.getElementById('login-modal').classList.add('hidden');
-            document.getElementById('dashboard').classList.add('visible');
-            document.getElementById('error-msg').style.display = 'none';
-            showToast('Welcome back.');
-            detectAdminIP();
+            try {
+                const r = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pass })
+                });
+                if (r.ok) {
+                    // Server set the admin session — reload so /admin
+                    // renders the real dashboard (with prefills).
+                    location.reload();
+                    return;
+                }
+            } catch (e) { /* network error → show the error below */ }
+            document.getElementById('error-msg').style.display = 'block';
+            document.getElementById('admin-pass').value = "";
         }
 
         async function detectAdminIP() {
@@ -630,9 +639,14 @@
             try {
                 const response = await fetch('/api/admin/start', {
                     method: 'POST',
-                    headers: { 'X-Admin-Password': adminPassword, 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ form_url: formUrl, timeout: parseInt(timeout), allowed_ip: allowedIp })
                 });
+
+                if (response.status === 401) {
+                    location.reload(); // admin session expired → back to login
+                    return;
+                }
 
                 if (response.ok) {
                     document.getElementById('qr-overlay').style.display = 'none';
@@ -641,7 +655,7 @@
                     fetchToken();
                     showToast('Session started.');
                 } else {
-                    showToast('Start failed. Check your password.', 'error');
+                    showToast('Start failed. Please try again.', 'error');
                 }
             } catch (e) {
                 console.error("Failed to start session.");
@@ -654,9 +668,13 @@
 
             try {
                 const response = await fetch('/api/admin/stop', {
-                    method: 'POST',
-                    headers: { 'X-Admin-Password': adminPassword }
+                    method: 'POST'
                 });
+
+                if (response.status === 401) {
+                    location.reload(); // admin session expired → back to login
+                    return;
+                }
 
                 if (response.ok) {
                     const blob = await response.blob();
@@ -682,7 +700,7 @@
                     document.getElementById('stop-btn-container').style.display = 'none';
                     showToast('Session stopped. Attendance exported.');
                 } else {
-                    showToast('Stop failed. Check your password.', 'error');
+                    showToast('Stop failed. Please try again.', 'error');
                 }
             } catch (e) {
                 console.error("Failed to stop session.");
@@ -693,14 +711,10 @@
         async function fetchToken() {
             const lifespan = document.getElementById('lifespan-input').value || 45;
             try {
-                const response = await fetch(`/api/admin/generate-qr-token?lifespan=${lifespan}`, {
-                    headers: { 'X-Admin-Password': adminPassword }
-                });
+                const response = await fetch(`/api/admin/generate-qr-token?lifespan=${lifespan}`);
 
                 if (response.status === 401) {
-                    document.getElementById('error-msg').style.display = 'block';
-                    clearInterval(refreshInterval);
-                    clearInterval(countdownInterval);
+                    location.reload(); // admin session expired → back to login
                     return;
                 } else if (response.status === 400) {
                     return;
@@ -735,9 +749,15 @@
             refreshInterval = setTimeout(() => fetchToken(), seconds * 1000);
         }
 
+        {% if not authed %}
         document.getElementById('admin-pass').addEventListener('keypress', function (e) {
             if (e.key === 'Enter') attemptLogin();
         });
+        {% else %}
+        detectAdminIP();
+        // Sync the Form Timeout field with any pre-filled default form URL
+        toggleTimeout();
+        {% endif %}
     </script>
 </body>
 </html>

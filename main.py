@@ -24,15 +24,15 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
-DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.")
 # Default QR refresh timer (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 45 secs (non-numeric values also fall back).
-DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "15").strip() or "45"
 if not DEFAULT_TIMER.isdigit():
     DEFAULT_TIMER = "45"
 # Default Google Form embed URL pre-filled in the Session Config.
 # Leave it blank and it stays blank (sessions then run with no form).
-DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "https://forms.gle/bV3kanpNP6G6a3R56").strip()
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 serializer = URLSafeTimedSerializer(SECRET_KEY)

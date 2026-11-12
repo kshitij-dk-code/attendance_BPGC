@@ -12,6 +12,7 @@ import os
 import secrets
 import io
 import csv
+import traceback
 
 os.environ["AUTHLIB_INSECURE_TRANSPORT"] = "1"
 
@@ -24,18 +25,18 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
-DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.")
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
 # Default QR refresh timer (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 45 secs (non-numeric values also fall back).
-DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "15").strip() or "45"
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
 if not DEFAULT_TIMER.isdigit():
     DEFAULT_TIMER = "45"
 # Default Google Form embed URL pre-filled in the Session Config.
 # Leave it blank and it stays blank (sessions then run with no form).
-DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "https://forms.gle/9QujmoaAgLTrgXAr6").strip()
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
 # Default form timeout (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 300 secs (non-numeric values also fall back).
-DEFAULT_FORM_TIMEOUT = os.getenv("DEFAULT_FORM_TIMEOUT", "200").strip() or "300"
+DEFAULT_FORM_TIMEOUT = os.getenv("DEFAULT_FORM_TIMEOUT", "").strip() or "300"
 if not DEFAULT_FORM_TIMEOUT.isdigit():
     DEFAULT_FORM_TIMEOUT = "300"
 
@@ -46,9 +47,11 @@ if not DEFAULT_FORM_TIMEOUT.isdigit():
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USE_POSTGRES = bool(DATABASE_URL)
+PSYCOPG_INSTALLED = False
 if USE_POSTGRES:
     try:
         import psycopg
+        PSYCOPG_INSTALLED = True
     except ImportError:
         USE_POSTGRES = False
         print("WARNING: DATABASE_URL is set but psycopg is not installed — falling back to SQLite.")
@@ -99,6 +102,13 @@ def verify_admin(request: Request):
     if request.session.get("admin_authed"):
         return True
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+def safe_db_error(exc):
+    """Short DB error text with the connection string (password!) redacted."""
+    msg = f"{type(exc).__name__}: {exc}"
+    if DATABASE_URL:
+        msg = msg.replace(DATABASE_URL, "***")
+    return msg[:500]
 
 def get_client_ip(request: Request):
     # Try multiple headers in order of reliability behind proxies
@@ -203,15 +213,44 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
                   form_submitted TEXT,
                   ip_address TEXT)'''
 
-    conn = db_connect()
     try:
-        conn.execute(create_sql)
-        conn.commit()
-    finally:
-        conn.close()
+        conn = db_connect()
+        try:
+            conn.execute(create_sql)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        traceback.print_exc()
+        storage = "PostgreSQL" if USE_POSTGRES else "SQLite"
+        raise HTTPException(status_code=500, detail=f"Could not initialize {storage} storage: {safe_db_error(exc)}")
 
     return {"status": "started", "storage": "postgres" if USE_POSTGRES else "sqlite",
             "db_file": session_state["db_file"], "db_table": session_state["db_table"]}
+
+@app.get("/api/admin/diagnostics")
+async def admin_diagnostics(authorized: bool = Depends(verify_admin)):
+    """Read-only storage diagnostics (no secrets) — used to debug Replit."""
+    info = {
+        "storage": "postgres" if USE_POSTGRES else "sqlite",
+        "database_url_set": bool(DATABASE_URL),
+        "psycopg_installed": PSYCOPG_INSTALLED,
+        "base_dir": BASE_DIR,
+        "session_active": session_state["is_active"],
+        "db_connect_ok": None,
+    }
+    if USE_POSTGRES:
+        try:
+            conn = psycopg.connect(DATABASE_URL)
+            try:
+                conn.execute("SELECT 1")
+            finally:
+                conn.close()
+            info["db_connect_ok"] = True
+        except Exception as exc:
+            info["db_connect_ok"] = False
+            info["db_error"] = safe_db_error(exc)
+    return info
 
 @app.post("/api/admin/stop")
 async def stop_session(authorized: bool = Depends(verify_admin)):

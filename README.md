@@ -185,7 +185,8 @@ Admin endpoints accept either the browser **session cookie** (set by
 | GET  | `/admin` | Admin dashboard HTML (login screen until authenticated) |
 | POST | `/api/admin/login` | Verify password → sets admin session cookie (401 on wrong password) |
 | POST | `/api/admin/logout` | Clear the admin session cookie |
-| POST | `/api/admin/start` | Start session → creates session DB |
+| POST | `/api/admin/start` | Start session → creates session DB (500 detail names the storage error) |
+| GET  | `/api/admin/diagnostics` | Storage health: mode, `DATABASE_URL` presence, psycopg, connect test |
 | POST | `/api/admin/stop` | Stop session → returns CSV, deactivates |
 | GET  | `/api/admin/generate-qr-token` | New signed QR token (`?lifespan=45`) |
 | GET  | `/api/check-ip` | Server-observed client IP + match status |
@@ -244,6 +245,7 @@ Full analysis and bottleneck discussion: see `WORK.md`.
 | iPhone says WiFi IP "not detected" | Expected — iOS hides local IPs. The public IP is used instead (same campus network as the instructor passes automatically); clear the IP field if it still blocks. |
 | `no such table: attendance` | Fixed — session must be active to finalize; restart if you see raw 500s. |
 | Attendance not visible in Replit's **Database** pane | The pane lists PostgreSQL only. Provision the Database tool (sets `DATABASE_URL`) and restart the app; SQLite mode never appears there. |
+| "Start failed" on Replit | The toast now shows the HTTP status + storage error. Open `/api/admin/diagnostics` after logging in: `db_connect_ok: false` with `db_error` means the managed Postgres is unreachable/misconfigured; check the Database tool and restart the app. |
 
 ## License
 

@@ -350,6 +350,12 @@ Replit/Cloudflare-style proxies.
 - **Default form timeout:** `DEFAULT_FORM_TIMEOUT` env (blank/non-numeric →
   `300`) is pre-filled in the Session Config and is the server-side fallback
   when `/api/admin/start` receives `timeout <= 0`.
+- **Start-failure debugging (added after a Replit report):** `/api/admin/start`
+  now returns the real storage error (connection string redacted via
+  `safe_db_error()`) instead of a bare 500, the dashboard toast shows the
+  status + detail, and `GET /api/admin/diagnostics` (authed) reports
+  `storage`, `database_url_set`, `psycopg_installed`, `base_dir`,
+  `db_connect_ok` and `db_error` without leaking secrets.
 - **Verified:** TestClient 23 checks — login/logout gate, timeout prefill +
   env override (600/blank/junk), timeout-0 fallback, admin-IP capture,
   geofence (local match, iPhone public/admin match, comma prefixes,
@@ -361,7 +367,7 @@ Replit/Cloudflare-style proxies.
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage (90–127), admin API incl. login/logout (137–257), `/scan` (273–320), network verify (322–361), OAuth (363–413), form APIs (417–433), finalize (436–472) |
+| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage (93–139), admin API incl. login/logout/start/diagnostics (148–309), `/scan` (312–360), network verify (362–401), OAuth (403–455), form APIs (457–474), finalize (477–512) |
 | `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()` |
 | `templates/form.html` | Form iframe, timer, confirm button, new-tab fallback |
 | `templates/network_check.html` | WebRTC detection (skipped on iOS) + POST `/api/verify-network` |

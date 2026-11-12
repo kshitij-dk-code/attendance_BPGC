@@ -181,15 +181,20 @@
                     <div><span>Your WiFi IP</span><code id="local-ip">—</code></div>
                     <div><span>Public IP</span><code id="public-ip">—</code></div>
                 </div>
-                <div class="hint">Connect to the campus WiFi and scan the QR code again.</div>
+                <div class="hint">Connect to the campus WiFi and scan the QR code again. iPhones don't expose a local WiFi IP — the public IP above is checked instead.</div>
             </div>
         </div>
     </div>
 
     <script>
         const netToken = {{ net_token | tojson }};
+        // iOS/iPadOS WebKit masks local IPs (mDNS) — skip WebRTC and let the
+        // server verify the public IP instead.
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
         function detectLocalIP() {
+            if (isIOS) return Promise.resolve(null);
             return new Promise((resolve) => {
                 let settled = false;
                 const done = (v) => { if (!settled) { settled = true; resolve(v); } };

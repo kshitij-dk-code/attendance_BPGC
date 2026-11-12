@@ -221,6 +221,17 @@
             transform: none;
         }
 
+        #open-form-link {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #a5b4fc;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            transition: var(--transition);
+        }
+
+        #open-form-link:hover { color: #c7d2fe; }
+
         /* Hidden real form */
         #finalize-form { display: none; }
 
@@ -252,8 +263,9 @@
 
         <div class="action-bar">
             <div class="action-bar-inner">
-                <p id="status-text">Fill out the form above. The confirm button appears after submission.</p>
+                <p id="status-text">Fill out the form above, then tap Confirm Attendance.</p>
                 <button id="confirm-btn" onclick="finalizeAttendance(true)">✅ Confirm Attendance</button>
+                <a id="open-form-link" href="{{ form_url }}" target="_blank" rel="noopener">Form not loading or opened in another tab? Open it here ↗</a>
                 <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST">
                     <input type="hidden" name="form_submitted" id="form-submitted-input" value="False (Timeout)">
                 </form>
@@ -327,10 +339,26 @@
 
         iframe.onload = function() {
             loadCount++;
+            if (loadCount === 1) {
+                // The form rendered. Google sometimes submits/navigates outside
+                // the iframe (or the embed is blocked), so let the student
+                // confirm manually instead of waiting for a second load event.
+                confirmBtn.style.display = 'inline-block';
+                statusText.innerText = "Submitted the form? Tap Confirm Attendance. If it opened in another tab, submit it there first.";
+            }
             if (loadCount >= 2) {
                 confirmFormSubmission();
             }
         };
+
+        // If the iframe never loads (blocked embed / slow network), still let
+        // the student confirm manually after a short wait.
+        setTimeout(() => {
+            if (!finalized && confirmBtn.style.display === 'none') {
+                confirmBtn.style.display = 'inline-block';
+                statusText.innerText = "Form taking too long? Open it in a new tab, submit it, then tap Confirm Attendance.";
+            }
+        }, 6000);
     </script>
 </body>
 </html>

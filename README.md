@@ -100,6 +100,7 @@ All configuration is via environment variables:
 | `DEFAULT_ALLOWED_IP` | `10.20.1.92` | WiFi-IP prefix **pre-filled** in Session Config (editable/clearable per session) |
 | `DEFAULT_TIMER` | *(blank → `45`)* | QR refresh rate (secs) **pre-filled** in Session Config; blank/non-numeric falls back to 45 |
 | `DEFAULT_FORM_URL` | *(blank)* | Google Form URL **pre-filled** in Session Config; blank stays blank (no form step) |
+| `DEFAULT_FORM_TIMEOUT` | *(blank → `300`)* | Form timeout (secs) **pre-filled** in Session Config; blank/non-numeric falls back to 300 |
 | `DATABASE_URL` | *(unset)* | PostgreSQL connection string. Replit's Database tool sets it automatically; when present, attendance is stored there instead of SQLite |
 | `ALLOWED_EMAIL_DOMAIN` | `@goa.bits-pilani.ac.in` | *(set in `main.py`)* which Google accounts may mark attendance |
 | `SECRET_KEY` | *(set in `main.py`)* | Signs tokens & sessions — **change for production** |
@@ -128,14 +129,17 @@ All configuration is via environment variables:
 ### Instructor
 1. Open `/admin`, enter the admin password. A wrong password stays on the
    login screen — the dashboard HTML (and its prefills) is only served
-   after the server verifies the password.
+   after the server verifies the password. **Log out** (top-right) clears
+   the session immediately; it does not stop a running attendance session.
 2. Fill Session Config (env defaults are pre-filled where set):
    - **Google Form URL** — from `DEFAULT_FORM_URL`; leave empty to skip
      the form step entirely.
    - **Form Timeout** — seconds a student gets to fill the form (enabled
-     once a form URL is present).
-   - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it, or
-     clear the field to disable the network restriction.
+     once a form URL is present); defaults to `DEFAULT_FORM_TIMEOUT` (300 s).
+   - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it,
+     comma-separate several prefixes (`10.20.1.,47.29.`), or clear the field
+     to disable the network restriction. iPhones can't report a local WiFi
+     IP, so they are matched by the instructor's public IP automatically.
    - **QR Refresh Rate** — from `DEFAULT_TIMER` (falls back to 45 s).
 3. Click **Start Session** — the QR appears and refreshes at the configured
    rate (45 s by default).
@@ -145,8 +149,10 @@ All configuration is via environment variables:
 ### Student
 1. Scan the QR → optional WiFi check page → redirected to Google.
 2. Sign in with the allowed college account.
-3. If a form is configured: fill the embedded form and press the confirm
-   button (or the timer finalizes it as `False (Timeout)`).
+3. If a form is configured: fill the embedded form and press **Confirm
+   Attendance**. The button appears as soon as the form loads; if the embed
+   opens the form in another tab, use the "Open it here" link, submit there,
+   then confirm. The timer finalizes stragglers as `False (Timeout)`.
 4. Success screen shows the recorded email.
 
 ---
@@ -178,6 +184,7 @@ Admin endpoints accept either the browser **session cookie** (set by
 |--------|------|---------|
 | GET  | `/admin` | Admin dashboard HTML (login screen until authenticated) |
 | POST | `/api/admin/login` | Verify password → sets admin session cookie (401 on wrong password) |
+| POST | `/api/admin/logout` | Clear the admin session cookie |
 | POST | `/api/admin/start` | Start session → creates session DB |
 | POST | `/api/admin/stop` | Stop session → returns CSV, deactivates |
 | GET  | `/api/admin/generate-qr-token` | New signed QR token (`?lifespan=45`) |
@@ -234,6 +241,7 @@ Full analysis and bottleneck discussion: see `WORK.md`.
 | "Use your @... account" | Signed into the wrong Google account. |
 | "Device not verified" | Cookies blocked, or the QR expired before finishing — scan again. |
 | WiFi check fails on cellular/VPN | Prefix check needs the campus WiFi; clear the IP field to disable the restriction. |
+| iPhone says WiFi IP "not detected" | Expected — iOS hides local IPs. The public IP is used instead (same campus network as the instructor passes automatically); clear the IP field if it still blocks. |
 | `no such table: attendance` | Fixed — session must be active to finalize; restart if you see raw 500s. |
 | Attendance not visible in Replit's **Database** pane | The pane lists PostgreSQL only. Provision the Database tool (sets `DATABASE_URL`) and restart the app; SQLite mode never appears there. |
 

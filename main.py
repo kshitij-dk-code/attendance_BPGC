@@ -24,15 +24,20 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
-DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.")
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
 # Default QR refresh timer (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 45 secs (non-numeric values also fall back).
-DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "15").strip() or "45"
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
 if not DEFAULT_TIMER.isdigit():
     DEFAULT_TIMER = "45"
 # Default Google Form embed URL pre-filled in the Session Config.
 # Leave it blank and it stays blank (sessions then run with no form).
-DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "https://forms.gle/vnPaHZhwnV4tqorS7").strip()
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
+# Default form timeout (seconds) pre-filled in the Session Config.
+# Leave it blank to fall back to 300 secs (non-numeric values also fall back).
+DEFAULT_FORM_TIMEOUT = os.getenv("DEFAULT_FORM_TIMEOUT", "").strip() or "300"
+if not DEFAULT_FORM_TIMEOUT.isdigit():
+    DEFAULT_FORM_TIMEOUT = "300"
 
 # Storage: Replit sets DATABASE_URL for its managed PostgreSQL (Database tool).
 # When present, attendance is written there — visible in Replit's Database pane
@@ -60,8 +65,9 @@ CONSUMED_MAX_AGE = 86400
 session_state = {
     "is_active": False,
     "form_url": "",
-    "timeout": 300,
+    "timeout": int(DEFAULT_FORM_TIMEOUT),
     "allowed_ip": "",
+    "admin_public_ip": "",
     "db_file": "",
     "db_table": "",
     "session_name": ""
@@ -145,6 +151,7 @@ async def admin_dashboard(request: Request):
             "default_ip": DEFAULT_ALLOWED_IP,
             "default_timer": DEFAULT_TIMER,
             "default_form_url": DEFAULT_FORM_URL,
+            "default_form_timeout": DEFAULT_FORM_TIMEOUT,
         })
     return templates.TemplateResponse(request=request, name="admin_dashboard.html", context=context)
 
@@ -156,16 +163,23 @@ async def admin_login(req: LoginRequest, request: Request):
     request.session["admin_authed_at"] = time.time()
     return {"status": "ok"}
 
+@app.post("/api/admin/logout")
+async def admin_logout(request: Request):
+    request.session.pop("admin_authed", None)
+    request.session.pop("admin_authed_at", None)
+    return {"status": "logged_out"}
+
 @app.post("/api/admin/start")
-async def start_session(req: StartSessionRequest, authorized: bool = Depends(verify_admin)):
+async def start_session(req: StartSessionRequest, request: Request, authorized: bool = Depends(verify_admin)):
     # Create a brand new storage target for this specific session: a Postgres
     # table on Replit, or a SQLite file next to main.py locally.
     stamp = datetime.now().strftime('%Y_%m_%d_%H_%M')
 
     session_state["is_active"] = True
     session_state["form_url"] = req.form_url.strip()
-    session_state["timeout"] = req.timeout
+    session_state["timeout"] = req.timeout if req.timeout and req.timeout > 0 else int(DEFAULT_FORM_TIMEOUT)
     session_state["allowed_ip"] = req.allowed_ip.strip()
+    session_state["admin_public_ip"] = get_client_ip(request)
     session_state["session_name"] = f"Attendance_{stamp}"
 
     if USE_POSTGRES:
@@ -246,13 +260,14 @@ async def generate_qr_token(request: Request, lifespan: int = None, authorized: 
 @app.get("/api/check-ip")
 async def check_ip(request: Request):
     client_ip = get_client_ip(request)
+    prefixes = [p.strip() for p in (session_state.get("allowed_ip") or "").split(",") if p.strip()]
     return {
         "detected_ip": client_ip,
         "x_forwarded_for": request.headers.get("X-Forwarded-For", ""),
         "x_real_ip": request.headers.get("X-Real-IP", ""),
         "raw_client_host": request.client.host if request.client else "",
         "allowed_prefix": session_state.get("allowed_ip", ""),
-        "wifi_match": client_ip.startswith(session_state.get("allowed_ip", "")) if session_state.get("allowed_ip") else None
+        "wifi_match": any(client_ip.startswith(p) for p in prefixes) if prefixes else None
     }
 
 @app.get("/scan")
@@ -307,7 +322,8 @@ async def scan_qr(request: Request, token: str):
 @app.post("/api/verify-network")
 async def verify_network(net_token: str = Form(...), local_ip: str = Form("")):
     """Verify the phone's local WiFi IP (detected via WebRTC) against the
-    allowed prefix. Falls back to the public IP the server observed."""
+    allowed prefix(es). Falls back to the public IP the server observed, or
+    the instructor's public IP (covers iOS, which hides local IPs)."""
     if not session_state["is_active"]:
         return JSONResponse({"ok": False, "message": "The attendance session has been closed."})
 
@@ -318,17 +334,23 @@ async def verify_network(net_token: str = Form(...), local_ip: str = Form("")):
     except Exception:
         return JSONResponse({"ok": False, "message": "Network check expired. Please scan the QR code again."})
 
-    allowed_ip = (session_state.get("allowed_ip") or "").strip()
-    if allowed_ip:
+    # Prefixes may be a comma-separated list (e.g. a LAN prefix plus the
+    # campus public-IP prefix).
+    prefixes = [p.strip() for p in (session_state.get("allowed_ip") or "").split(",") if p.strip()]
+    if prefixes:
         local_ip = (local_ip or "").strip()
-        local_ok = bool(local_ip) and local_ip.startswith(allowed_ip)
-        public_ok = public_ip.startswith(allowed_ip)
-        if not (local_ok or public_ok):
+        local_ok = bool(local_ip) and any(local_ip.startswith(p) for p in prefixes)
+        public_ok = any(public_ip.startswith(p) for p in prefixes)
+        # iPhones (WebKit) never expose the local WiFi IP, so also accept
+        # students sharing the instructor's public IP (same NAT/campus WiFi).
+        admin_public_ip = (session_state.get("admin_public_ip") or "").strip()
+        admin_ok = bool(admin_public_ip) and public_ip == admin_public_ip
+        if not (local_ok or public_ok or admin_ok):
             return JSONResponse({
                 "ok": False,
                 "message": "You must be connected to the required WiFi network to mark attendance.",
-                "expected": allowed_ip,
-                "local_ip": local_ip or "not detected",
+                "expected": ", ".join(prefixes),
+                "local_ip": local_ip or "not detected (normal on iPhone)",
                 "public_ip": public_ip
             })
 

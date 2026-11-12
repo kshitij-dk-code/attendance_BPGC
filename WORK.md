@@ -98,7 +98,7 @@ POST /api/admin/stop   ──────▶ is_active=False, streams CSV
 
 | Structure | Key/Value | Meaning |
 |-----------|-----------|---------|
-| `session_state` | dict | current session: active flag, form URL, timeout, allowed IP, **db file** |
+| `session_state` | dict | current session: active flag, form URL, timeout, allowed IP, instructor's public IP (`admin_public_ip`), **db file** |
 | `consumed_tokens` | `(nonce, device_id) → timestamp` | QR consumption; entries pruned after 24 h (`CONSUMED_MAX_AGE`) |
 | `form_confirmed` | set of emails | whether the student pressed the form-confirm button |
 
@@ -110,7 +110,7 @@ requirement until this state moves to SQLite/Redis. (Load-test §7.)
 
 | Token/cookie | Signed by | Max age | Carries |
 |--------------|-----------|---------|---------|
-| `session` (admin login) | SessionMiddleware (SECRET_KEY) | browser session; auth valid 10 min after login | `admin_authed`, `admin_authed_at` |
+| `session` (admin login) | SessionMiddleware (SECRET_KEY) | browser session; auth valid 10 min after login; `POST /api/admin/logout` clears it immediately | `admin_authed`, `admin_authed_at` |
 | QR `token` (query) | `serializer` (SECRET_KEY) | `lifespan` inside payload (45 s default), serializer cap 86400 | `nonce`, `lifespan` |
 | `device_session` cookie | serializer | 300 s | `device_id`, observed IP |
 | `device_id` cookie | random hex(16) | 1 year | the permanent device fingerprint |
@@ -161,8 +161,16 @@ The server typically only sees the phone's **public** IP (e.g. `47.29.x`)
 while the configured prefix is a **LAN** prefix (`10.x`). So verification is
 client-side: `network_check.html` uses WebRTC (`RTCPeerConnection`) to
 discover the local IP and POSTs it to `/api/verify-network`, which passes if
-*either* local or public IP matches the prefix. WebRTC may fail (incognito /
-mDNS masking / cellular) — then the public fallback decides.
+*either* local or public IP matches **any** of the comma-separated prefixes
+(`10.20.1.,47.29.`). WebRTC may fail (incognito / mDNS masking / cellular) —
+then the public fallback decides.
+
+**iOS/iPadOS:** WebKit never exposes the local IP (mDNS), so the page skips
+WebRTC entirely (`isIOS`) and the public IP decides. To make geofencing work
+on iPhones, `POST /api/admin/start` records the instructor's public IP in
+`session_state["admin_public_ip"]`; `/api/verify-network` then also accepts a
+student whose public IP equals it (same campus NAT / WiFi). Explicit prefixes
+still work and take precedence for both local and public addresses.
 
 `DEFAULT_ALLOWED_IP` (env, default `10.20.1.92`) is **pre-filled** into the
 Session Config input (`value="{{ default_ip }}"` on `/admin`); it is fully
@@ -317,16 +325,46 @@ Replit/Cloudflare-style proxies.
   table, integrity + connection errors → friendly pages / 400). No real
   PostgreSQL server on the dev box.
 
+### 3.12 Deployment vuln pins, logout, iOS geofence, form-embed fallback, default form timeout
+- **Dependencies (deployment blocker):** `Authlib` 1.8.0 → **1.9.1** and
+  `certifi` 2026.7.22 → **2026.10.18** (PYSEC-2026-4355/4356,
+  GHSA-6v38-4h7w-rj9h; PYSEC-2026-4320, GHSA-6q48-6c7w-9gw2).
+- **Logout:** `POST /api/admin/logout` pops `admin_authed`/`admin_authed_at`;
+  a fixed top-right **Log out** button (authed dashboard only) posts and
+  reloads to the login screen. It does **not** stop an active session.
+- **iOS WiFi check:** iOS/iPadOS WebKit hides local IPs (mDNS), so
+  `network_check.html` skips WebRTC there and the server decides on the
+  public IP. `/api/admin/start` records the instructor's public IP
+  (`session_state["admin_public_ip"]`) and `/api/verify-network` accepts a
+  student whose public IP equals it (same campus NAT) — so the existing LAN
+  default keeps working on Android *and* iPhone. The prefix field also
+  accepts a **comma-separated list** (`10.20.1.,47.29.`), and the failure
+  panel says "not detected (normal on iPhone)" instead of a bare
+  "not detected". `/api/check-ip` understands the list too.
+- **Google Form embed hang:** some accounts/embeds submit or navigate outside
+  the iframe, so the old "confirm appears on the 2nd iframe load" logic never
+  fired and the page sat until the timeout. Now the confirm button appears
+  after the **first** load (manual confirm), a second load still auto-confirms,
+  an **"Open the form in a new tab"** link is always available, and a 6 s
+  fallback reveals the confirm button if the embed never loads.
+- **Default form timeout:** `DEFAULT_FORM_TIMEOUT` env (blank/non-numeric →
+  `300`) is pre-filled in the Session Config and is the server-side fallback
+  when `/api/admin/start` receives `timeout <= 0`.
+- **Verified:** TestClient 23 checks — login/logout gate, timeout prefill +
+  env override (600/blank/junk), timeout-0 fallback, admin-IP capture,
+  geofence (local match, iPhone public/admin match, comma prefixes,
+  off-network block), template renders; `Authlib 1.9.1` import clean.
+
 ---
 
 ## 4. File map
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–52), helpers/auth/storage (84–121), admin API incl. login (123–233), `/scan` (258–305), network verify (307–340), OAuth (342–391), form APIs (393–413), finalize (415–451) |
-| `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, `detectAdminIP()` |
-| `templates/form.html` | Form iframe, timer, confirm button |
-| `templates/network_check.html` | WebRTC detection + POST `/api/verify-network` |
+| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage (90–127), admin API incl. login/logout (137–257), `/scan` (273–320), network verify (322–361), OAuth (363–413), form APIs (417–433), finalize (436–472) |
+| `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()` |
+| `templates/form.html` | Form iframe, timer, confirm button, new-tab fallback |
+| `templates/network_check.html` | WebRTC detection (skipped on iOS) + POST `/api/verify-network` |
 | `templates/status.html` | Success/error + email chip |
 | `loadtest/locustfile.py` | Realistic load test (admins + students; `LOCUST_NO_WAIT=1` for ceiling mode) |
 | `requirements.txt` | Pinned deps (generated via `pip freeze`; includes `psycopg` for Replit PostgreSQL) |
@@ -494,15 +532,15 @@ LOCUST_NO_WAIT=1 ... # same, ceiling mode
 3. **`consumed_tokens` grows for 24 h** — fine now (pruned), but if state
    moves to a store, keep the TTL.
 4. No automated tests — the §6 simulation is the seed for a real suite.
-5. `form.html` confirm UX depends on `postMessage`/load counting from a
-   Google-hosted iframe; Google UI changes can break it (hence the timeout
-   fallback).
+5. `form.html` confirm UX still watches iframe load events for auto-confirm;
+   the manual confirm + new-tab link + 6 s fallback (§3.12) make it robust,
+   but Google UI changes can always alter the auto-detect.
 6. Attendance CSV column "Device Fingerprint" exposes raw `device_id` —
    intentional for auditing; don't log it anywhere public.
-7. **No admin logout / login rate-limiting** — auth expires 10 min after
-   login (§3.10, page-load check only), but there is no explicit logout
-   and `/api/admin/login` has no lockout (fine for a local tool; add
-   `POST /api/admin/logout` + a backoff if shared machines ever matter).
+7. **No login rate-limiting** — explicit logout now exists (§3.12) and auth
+   expires 10 min after login (§3.10, page-load check only), but
+   `/api/admin/login` has no lockout (fine for a local tool; add a backoff if
+   shared machines ever matter).
 
 ---
 

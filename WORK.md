@@ -73,7 +73,7 @@ It landed in the parent `attendance-app/venv` (see §1.1). Run it as:
 ADMIN                          SERVER                         STUDENT
 ─────                          ──────                         ───────
 POST /api/admin/login  ──────▶ verify password → session cookie (admin_authed)
-POST /api/admin/start  ──────▶ creates Attendance_<ts>.db
+POST /api/admin/start  ──────▶ creates session storage (PG table / SQLite file)
                                session_state.is_active=True
 GET generate-qr-token  ◀────── signed token {nonce, lifespan}
 (project QR ────────────────────────────────────────────────▶ GET /scan?token=…
@@ -124,14 +124,23 @@ requirement until this state moves to SQLite/Redis. (Load-test §7.)
 
 ### 2.4 Database rules (by design — do not "fix" these)
 
-Every session gets a fresh `Attendance_<Y_M_D_H_M>.db`:
+Every session gets its own storage target:
+
+- **`DATABASE_URL` set (Replit):** a fresh PostgreSQL table
+  `attendance_<Y_M_D_H_M>` (`SERIAL` id) in that database — this is what
+  makes the rows show up in Replit's **Database → My Data** pane.
+- **No `DATABASE_URL` (local):** a fresh
+  `Attendance_<Y_M_D_H_M>.db` file **next to `main.py`** (anchored via
+  `BASE_DIR`, independent of the working directory).
+
+Both use the same schema:
 
 ```sql
 attendance(
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY / SERIAL PRIMARY KEY,
   email TEXT UNIQUE,          -- one mark per student per session
   device_id TEXT UNIQUE,      -- one mark per device per session
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  timestamp DATETIME/TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   form_submitted TEXT,
   ip_address TEXT)
 ```
@@ -139,8 +148,12 @@ attendance(
 - **Same Google account on two phones → second one is rejected.** That is
   the anti-sharing feature, not a bug. Testing with one account will always
   look "broken" on the second device.
-- IntegrityError → friendly page "You or this device have already marked
-  attendance" (`main.py` auth_callback + finalize_attendance).
+- IntegrityError (`sqlite3` or `psycopg`) → friendly page "You or this
+  device have already marked attendance" (`main.py` auth_callback +
+  finalize_attendance).
+- **Replit's Database pane is PostgreSQL-only** — it never lists SQLite
+  `.db` files. If attendance is missing there, `DATABASE_URL` isn't set
+  (provision the Database tool, then restart the app).
 
 ### 2.5 WiFi IP restriction (NAT reality)
 
@@ -278,19 +291,45 @@ Replit/Cloudflare-style proxies.
   + flags cleared; re-login restores a fresh 10-min window; header API auth
   unaffected.
 
+### 3.11 Replit storage: PostgreSQL when `DATABASE_URL` is set
+- **Problem:** on Replit, attendance was invisible in the **Database** pane.
+  That pane is Replit-managed **PostgreSQL only** — it never lists SQLite
+  files. The app only wrote per-session SQLite, CWD-relative (as was the
+  `templates/` path), so on a different CWD the files could even land outside
+  the workspace.
+- **Fix:**
+  - `DATABASE_URL` present (Replit's Database tool provisions it) switches
+    storage to PostgreSQL via `psycopg` (3.3.8, added to
+    `requirements.txt`). Each session gets its own table
+    `attendance_<Y_M_D_H_M>` with `SERIAL` id — browse it in
+    **Database → My Data**.
+  - No `DATABASE_URL` → unchanged per-session SQLite, now anchored to
+    `BASE_DIR = os.path.dirname(os.path.abspath(__file__))`, so the `.db`
+    always lands next to `main.py`. `templates/` is anchored the same way.
+  - New helpers: `db_connect()` (Postgres connection or SQLite file),
+    `session_table()` (quoted PG identifier vs `attendance`), `sql_params()`
+    (`?` → `%s`); unified `DB_INTEGRITY_ERROR` / `DB_ERROR`; `session_state`
+    gains `db_table` + `session_name`; CSV filename comes from
+    `session_name`.
+- **Verified:** SQLite flow run from a foreign CWD (DB lands next to
+  `main.py`; finalize/stop/CSV/duplicate all OK); Postgres branch exercised
+  with a stub driver (CREATE/INSERT/SELECT shapes, `%s` placeholders, quoted
+  table, integrity + connection errors → friendly pages / 400). No real
+  PostgreSQL server on the dev box.
+
 ---
 
 ## 4. File map
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–59), helpers/auth (61–87), admin API incl. login (89–192), `/scan` (194–241), network verify (243–276), OAuth (278–324), form APIs (326–346), finalize (348–384) |
+| `main.py` | Everything backend: config (l.16–52), helpers/auth/storage (84–121), admin API incl. login (123–233), `/scan` (258–305), network verify (307–340), OAuth (342–391), form APIs (393–413), finalize (415–451) |
 | `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, `detectAdminIP()` |
 | `templates/form.html` | Form iframe, timer, confirm button |
 | `templates/network_check.html` | WebRTC detection + POST `/api/verify-network` |
 | `templates/status.html` | Success/error + email chip |
 | `loadtest/locustfile.py` | Realistic load test (admins + students; `LOCUST_NO_WAIT=1` for ceiling mode) |
-| `requirements.txt` | Pinned deps (generated via `pip freeze`) |
+| `requirements.txt` | Pinned deps (generated via `pip freeze`; includes `psycopg` for Replit PostgreSQL) |
 | `run.txt` | 2-line run reminder |
 | `README.md` | User-facing docs |
 

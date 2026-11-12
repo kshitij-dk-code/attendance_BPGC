@@ -24,15 +24,32 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
-DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.")
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
 # Default QR refresh timer (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 45 secs (non-numeric values also fall back).
-DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "15").strip() or "45"
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
 if not DEFAULT_TIMER.isdigit():
     DEFAULT_TIMER = "45"
 # Default Google Form embed URL pre-filled in the Session Config.
 # Leave it blank and it stays blank (sessions then run with no form).
-DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "https://forms.gle/bV3kanpNP6G6a3R56").strip()
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
+
+# Storage: Replit sets DATABASE_URL for its managed PostgreSQL (Database tool).
+# When present, attendance is written there — visible in Replit's Database pane
+# and persistent across restarts. Otherwise (local dev) it falls back to
+# per-session SQLite files in this file's directory.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USE_POSTGRES = bool(DATABASE_URL)
+if USE_POSTGRES:
+    try:
+        import psycopg
+    except ImportError:
+        USE_POSTGRES = False
+        print("WARNING: DATABASE_URL is set but psycopg is not installed — falling back to SQLite.")
+
+DB_INTEGRITY_ERROR = psycopg.IntegrityError if USE_POSTGRES else sqlite3.IntegrityError
+DB_ERROR = psycopg.Error if USE_POSTGRES else sqlite3.Error
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
@@ -45,7 +62,9 @@ session_state = {
     "form_url": "",
     "timeout": 300,
     "allowed_ip": "",
-    "db_file": ""
+    "db_file": "",
+    "db_table": "",
+    "session_name": ""
 }
 
 oauth = OAuth()
@@ -57,9 +76,10 @@ oauth.register(
     client_kwargs={'scope': 'openid email profile', 'prompt': 'select_account'}
 )
 
-if not os.path.exists("templates"):
-    os.makedirs("templates")
-templates = Jinja2Templates(directory="templates")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+if not os.path.exists(TEMPLATES_DIR):
+    os.makedirs(TEMPLATES_DIR)
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 def render_status(request, msg, success=False, email=None):
     return templates.TemplateResponse(request=request, name="status.html", context={"message": msg, "success": success, "email": email})
@@ -83,6 +103,22 @@ def get_client_ip(request: Request):
             if ip and ip != "unknown":
                 return ip
     return request.client.host if request.client else "unknown"
+
+def db_connect():
+    """Open the current session's storage (PostgreSQL or the session's SQLite file)."""
+    if USE_POSTGRES:
+        return psycopg.connect(DATABASE_URL)
+    return sqlite3.connect(session_state["db_file"])
+
+def session_table():
+    """SQL identifier of the table holding the current session's rows."""
+    if USE_POSTGRES:
+        return f'"{session_state["db_table"]}"'
+    return "attendance"
+
+def sql_params(query):
+    """Translate qmark placeholders to the active driver's style."""
+    return query.replace("?", "%s") if USE_POSTGRES else query
 
 class StartSessionRequest(BaseModel):
     form_url: str
@@ -122,45 +158,64 @@ async def admin_login(req: LoginRequest, request: Request):
 
 @app.post("/api/admin/start")
 async def start_session(req: StartSessionRequest, authorized: bool = Depends(verify_admin)):
-    # Create a brand new DB file for this specific session
-    db_filename = f"Attendance_{datetime.now().strftime('%Y_%m_%d_%H_%M')}.db"
-    
+    # Create a brand new storage target for this specific session: a Postgres
+    # table on Replit, or a SQLite file next to main.py locally.
+    stamp = datetime.now().strftime('%Y_%m_%d_%H_%M')
+
     session_state["is_active"] = True
     session_state["form_url"] = req.form_url.strip()
     session_state["timeout"] = req.timeout
     session_state["allowed_ip"] = req.allowed_ip.strip()
-    session_state["db_file"] = db_filename
-    
-    # Initialize the schema in the new file
-    conn = sqlite3.connect(db_filename)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS attendance
-                 (id INTEGER PRIMARY KEY, 
-                  email TEXT UNIQUE, 
-                  device_id TEXT UNIQUE, 
+    session_state["session_name"] = f"Attendance_{stamp}"
+
+    if USE_POSTGRES:
+        session_state["db_file"] = ""
+        session_state["db_table"] = f"attendance_{stamp}"
+        create_sql = f'''CREATE TABLE IF NOT EXISTS {session_table()}
+                 (id SERIAL PRIMARY KEY,
+                  email TEXT UNIQUE,
+                  device_id TEXT UNIQUE,
+                  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  form_submitted TEXT,
+                  ip_address TEXT)'''
+    else:
+        session_state["db_table"] = ""
+        session_state["db_file"] = os.path.join(BASE_DIR, f"Attendance_{stamp}.db")
+        create_sql = '''CREATE TABLE IF NOT EXISTS attendance
+                 (id INTEGER PRIMARY KEY,
+                  email TEXT UNIQUE,
+                  device_id TEXT UNIQUE,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                   form_submitted TEXT,
-                  ip_address TEXT)''')
-    conn.commit()
-    conn.close()
-    
-    return {"status": "started", "db_file": db_filename}
+                  ip_address TEXT)'''
+
+    conn = db_connect()
+    try:
+        conn.execute(create_sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "started", "storage": "postgres" if USE_POSTGRES else "sqlite",
+            "db_file": session_state["db_file"], "db_table": session_state["db_table"]}
 
 @app.post("/api/admin/stop")
 async def stop_session(authorized: bool = Depends(verify_admin)):
     session_state["is_active"] = False
 
-    if not session_state["db_file"]:
+    if not (session_state["db_file"] or session_state["db_table"]):
         raise HTTPException(status_code=400, detail="No session has been started yet")
 
-    # Extract data from the session's specific DB file
+    # Extract data from the session's specific storage target
     try:
-        conn = sqlite3.connect(session_state["db_file"])
-        c = conn.cursor()
-        c.execute("SELECT id, email, device_id, timestamp, form_submitted, ip_address FROM attendance")
-        rows = c.fetchall()
-        conn.close()
-    except sqlite3.OperationalError:
+        conn = db_connect()
+        try:
+            c = conn.cursor()
+            c.execute(f"SELECT id, email, device_id, timestamp, form_submitted, ip_address FROM {session_table()}")
+            rows = c.fetchall()
+        finally:
+            conn.close()
+    except DB_ERROR:
         raise HTTPException(status_code=400, detail="Session database is not initialized")
 
     output = io.StringIO()
@@ -169,8 +224,8 @@ async def stop_session(authorized: bool = Depends(verify_admin)):
     for row in rows:
         writer.writerow(row)
     output.seek(0)
-    
-    filename = session_state["db_file"].replace(".db", ".csv")
+
+    filename = f"{session_state.get('session_name') or 'Attendance'}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
@@ -315,14 +370,17 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
     # If NO form is required, insert directly
     if not session_state["form_url"]:
         try:
-            conn = sqlite3.connect(session_state["db_file"])
-            c = conn.cursor()
-            c.execute("INSERT INTO attendance (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)", 
-                      (email, device_id, "N/A (No Form)", get_client_ip(request)))
-            conn.commit()
-            conn.close()
-        except sqlite3.IntegrityError:
+            conn = db_connect()
+            try:
+                conn.execute(sql_params(f"INSERT INTO {session_table()} (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)"),
+                             (email, device_id, "N/A (No Form)", get_client_ip(request)))
+                conn.commit()
+            finally:
+                conn.close()
+        except DB_INTEGRITY_ERROR:
             return render_status("Error: You or this device have already marked attendance today.", success=False, email=email)
+        except DB_ERROR:
+            return render_status("The attendance session has been closed.", success=False, email=email)
         return render_status("Attendance Marked Successfully!", success=True, email=email)
 
     return templates.TemplateResponse(request=request, name="form.html", context={
@@ -366,23 +424,23 @@ async def finalize_attendance(request: Request, token: str, form_submitted: str 
     except Exception:
         return render_status("Session expired.", success=False)
 
-    # Reject when no session is running (db_file empty) or the admin already
-    # stopped it — otherwise sqlite3.connect("") silently creates a temp empty
-    # database and the INSERT explodes with "no such table: attendance" (500).
-    if not session_state["is_active"] or not session_state["db_file"]:
+    # Reject when no session is running (no storage target) or the admin
+    # already stopped it — otherwise sqlite3.connect("") silently creates a
+    # temp empty database and the INSERT explodes with "no such table: attendance" (500).
+    if not session_state["is_active"] or not (session_state["db_file"] or session_state["db_table"]):
         return render_status("The attendance session has been closed.", success=False, email=email)
 
     try:
-        conn = sqlite3.connect(session_state["db_file"])
+        conn = db_connect()
         try:
-            conn.execute("INSERT INTO attendance (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)",
+            conn.execute(sql_params(f"INSERT INTO {session_table()} (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)"),
                          (email, device_id, form_submitted, get_client_ip(request)))
             conn.commit()
         finally:
             conn.close()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERROR:
         return render_status("Error: You or this device have already marked attendance for this session.", success=False, email=email)
-    except sqlite3.OperationalError:
+    except DB_ERROR:
         return render_status("The attendance session has been closed.", success=False, email=email)
 
     return render_status("Attendance Marked!", success=True, email=email)

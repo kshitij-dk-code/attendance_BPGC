@@ -35,8 +35,10 @@ step, no external database.
   timeout fallback ("False (Timeout)")
 - **Anti-sharing enforcement** — DB `UNIQUE` on both `email` and `device_id`:
   one mark per student, one mark per device
-- **Per-session databases** — every start creates a fresh
-  `Attendance_YYYY_MM_DD_HH_MM.db`
+- **Per-session storage** — every start creates a fresh PostgreSQL table
+  (`attendance_YYYY_MM_DD_HH_MM`) when `DATABASE_URL` is set (Replit's
+  Database tool), or an `Attendance_YYYY_MM_DD_HH_MM.db` SQLite file next to
+  `main.py` locally
 - **Modern dark UI** — glassmorphism, responsive, works on cheap phones
 
 ## Tech stack
@@ -45,7 +47,7 @@ step, no external database.
 |-----------|--------|
 | Framework | FastAPI + Uvicorn |
 | Templates | Jinja2 |
-| Database  | SQLite (file per session) |
+| Database  | PostgreSQL when `DATABASE_URL` is set (Replit), else SQLite (file per session) |
 | Auth      | Authlib (Google OIDC) |
 | Tokens    | itsdangerous (signed, timed) |
 | Sessions  | Starlette SessionMiddleware |
@@ -98,11 +100,26 @@ All configuration is via environment variables:
 | `DEFAULT_ALLOWED_IP` | `10.20.1.92` | WiFi-IP prefix **pre-filled** in Session Config (editable/clearable per session) |
 | `DEFAULT_TIMER` | *(blank → `45`)* | QR refresh rate (secs) **pre-filled** in Session Config; blank/non-numeric falls back to 45 |
 | `DEFAULT_FORM_URL` | *(blank)* | Google Form URL **pre-filled** in Session Config; blank stays blank (no form step) |
+| `DATABASE_URL` | *(unset)* | PostgreSQL connection string. Replit's Database tool sets it automatically; when present, attendance is stored there instead of SQLite |
 | `ALLOWED_EMAIL_DOMAIN` | `@goa.bits-pilani.ac.in` | *(set in `main.py`)* which Google accounts may mark attendance |
 | `SECRET_KEY` | *(set in `main.py`)* | Signs tokens & sessions — **change for production** |
 
 > **Note:** `ALLOWED_EMAIL_DOMAIN` and `SECRET_KEY` are constants at the top of
 > `main.py` (lines 20 and 19).
+
+---
+
+## Storage
+
+- **Replit (PostgreSQL):** when `DATABASE_URL` is set — the Database tool
+  provisions it automatically — each session writes to its own table named
+  `attendance_YYYY_MM_DD_HH_MM`. Open **Database → My Data** in the workspace
+  to browse the rows. The Database pane shows PostgreSQL only; it never lists
+  SQLite files.
+- **Local / no `DATABASE_URL`:** each session creates
+  `Attendance_YYYY_MM_DD_HH_MM.db` **next to `main.py`**, regardless of the
+  working directory.
+- Either way, **Stop Session** downloads the same CSV.
 
 ---
 
@@ -218,6 +235,7 @@ Full analysis and bottleneck discussion: see `WORK.md`.
 | "Device not verified" | Cookies blocked, or the QR expired before finishing — scan again. |
 | WiFi check fails on cellular/VPN | Prefix check needs the campus WiFi; clear the IP field to disable the restriction. |
 | `no such table: attendance` | Fixed — session must be active to finalize; restart if you see raw 500s. |
+| Attendance not visible in Replit's **Database** pane | The pane lists PostgreSQL only. Provision the Database tool (sets `DATABASE_URL`) and restart the app; SQLite mode never appears there. |
 
 ## License
 

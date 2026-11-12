@@ -110,7 +110,7 @@ requirement until this state moves to SQLite/Redis. (Load-test §7.)
 
 | Token/cookie | Signed by | Max age | Carries |
 |--------------|-----------|---------|---------|
-| `session` (admin login) | SessionMiddleware (SECRET_KEY) | browser session | `admin_authed` flag |
+| `session` (admin login) | SessionMiddleware (SECRET_KEY) | browser session; auth valid 10 min after login | `admin_authed`, `admin_authed_at` |
 | QR `token` (query) | `serializer` (SECRET_KEY) | `lifespan` inside payload (45 s default), serializer cap 86400 | `nonce`, `lifespan` |
 | `device_session` cookie | serializer | 300 s | `device_id`, observed IP |
 | `device_id` cookie | random hex(16) | 1 year | the permanent device fingerprint |
@@ -262,6 +262,21 @@ Replit/Cloudflare-style proxies.
   `form-url-input`/`lifespan-input`/IP); wrong password → 401 + still login;
   correct → dashboard with prefills; session-only API call works;
   header-only API call still works (loadtest unaffected).
+
+### 3.10 Admin login expires after 10 minutes
+- `POST /api/admin/login` now also stores `admin_authed_at = time.time()`;
+  `ADMIN_SESSION_TIMEOUT = 600` (10 min) is a constant next to
+  `ADMIN_PASSWORD`.
+- `GET /admin` checks the age on every load: older than 10 min → the
+  `admin_authed` / `admin_authed_at` session keys are dropped and the login
+  screen is rendered (a refresh sends the device back to login).
+- Deliberately **page-load only**: API calls keep working while a loaded
+  dashboard is open, so the QR auto-refresh does not kick an instructor out
+  mid-session (matches the requested "provided that the webpage is
+  refreshed").
+- Verified with TestClient (time patched): 599 s → dashboard; 601 s → login
+  + flags cleared; re-login restores a fresh 10-min window; header API auth
+  unaffected.
 
 ---
 
@@ -445,10 +460,10 @@ LOCUST_NO_WAIT=1 ... # same, ceiling mode
    fallback).
 6. Attendance CSV column "Device Fingerprint" exposes raw `device_id` —
    intentional for auditing; don't log it anywhere public.
-7. **No admin logout / login rate-limiting** — the session cookie lives
-   until the browser closes, and `/api/admin/login` has no lockout (fine
-   for a local tool; add `POST /api/admin/logout` + a backoff if shared
-   machines ever matter).
+7. **No admin logout / login rate-limiting** — auth expires 10 min after
+   login (§3.10, page-load check only), but there is no explicit logout
+   and `/api/admin/login` has no lockout (fine for a local tool; add
+   `POST /api/admin/logout` + a backoff if shared machines ever matter).
 
 ---
 

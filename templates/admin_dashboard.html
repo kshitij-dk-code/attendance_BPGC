@@ -509,7 +509,9 @@
             pointer-events: none;
             transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease;
             backdrop-filter: blur(10px);
-            white-space: nowrap;
+            white-space: normal;
+            max-width: min(680px, 90vw);
+            text-align: center;
         }
 
         #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
@@ -685,17 +687,26 @@
                 }
 
                 if (response.ok) {
+                    const data = await response.json().catch(() => ({}));
                     document.getElementById('qr-overlay').style.display = 'none';
                     document.getElementById('qr-container').classList.remove('blurred');
                     document.getElementById('stop-btn-container').style.display = 'block';
                     fetchToken();
-                    showToast('Session started.');
+                    showToast('Session started' + (data.storage ? ' (' + data.storage + ')' : '') + '.');
                 } else {
-                    showToast('Start failed. Please try again.', 'error');
+                    let detail = '';
+                    try {
+                        const err = await response.json();
+                        detail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail || err);
+                    } catch (e) {
+                        detail = await response.text().catch(() => '');
+                    }
+                    console.error('Start failed', response.status, detail);
+                    showToast('Start failed (' + response.status + '): ' + (detail || 'unknown error'), 'error');
                 }
             } catch (e) {
-                console.error("Failed to start session.");
-                showToast('Something went wrong.', 'error');
+                console.error("Failed to start session.", e);
+                showToast('Something went wrong: ' + e.message, 'error');
             }
         }
 

@@ -14,7 +14,8 @@ step, no external database.
 ## Features
 
 - **Admin dashboard** (`/admin`) with server-verified login (session cookie;
-  wrong password never sees the dashboard)
+  wrong password never sees the dashboard; login expires 10 minutes after
+  entry — a refresh then returns to the login screen)
   - Session config: Google Form URL, form timeout, WiFi IP restriction,
     QR refresh rate — each pre-filled from an env default (see Configuration)
   - Live QR code that auto-refreshes every 45 s (configurable lifespan)

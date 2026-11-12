@@ -19,6 +19,9 @@ app = FastAPI()
 SECRET_KEY = "your-super-secret-key"
 ALLOWED_EMAIL_DOMAIN = "@goa.bits-pilani.ac.in"
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+# Admin dashboard login is valid for this long after the password is entered.
+# Enforced whenever /admin is loaded (i.e. on page refresh).
+ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
 DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
@@ -95,6 +98,11 @@ async def admin_dashboard(request: Request):
     # only rendered for an authenticated admin session — everyone else gets
     # the login screen alone.
     authed = bool(request.session.get("admin_authed"))
+    if authed and time.time() - request.session.get("admin_authed_at", 0) > ADMIN_SESSION_TIMEOUT:
+        # Login is older than 10 minutes — drop it and show the login screen.
+        request.session.pop("admin_authed", None)
+        request.session.pop("admin_authed_at", None)
+        authed = False
     context = {"authed": authed}
     if authed:
         context.update({
@@ -109,6 +117,7 @@ async def admin_login(req: LoginRequest, request: Request):
     if not secrets.compare_digest(req.password, ADMIN_PASSWORD):
         raise HTTPException(status_code=401, detail="Incorrect password")
     request.session["admin_authed"] = True
+    request.session["admin_authed_at"] = time.time()
     return {"status": "ok"}
 
 @app.post("/api/admin/start")

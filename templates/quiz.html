@@ -344,7 +344,7 @@
             <h2>{{ quiz.title or "Quiz" }}</h2>
             {% if quiz.description %}<p class="form-desc">{{ quiz.description }}</p>{% endif %}
             <div class="email-chip">Logged in as <strong>{{ email }}</strong></div>
-            <div class="email-note">Your verified email is recorded with these answers — it is not an editable field.</div>
+            <div class="email-note">Your verified email is recorded with these answers.</div>
         </div>
 
         <form id="quiz-form" onsubmit="event.preventDefault(); submitQuiz();">

@@ -325,7 +325,7 @@ Replit/Cloudflare-style proxies.
   table, integrity + connection errors → friendly pages / 400). No real
   PostgreSQL server on the dev box.
 
-### 3.12 Deployment vuln pins, logout, iOS geofence, form-embed fallback, default form timeout
+### 3.12 Deployment vuln pins, logout, iOS geofence, form email binding, default form timeout
 - **Dependencies (deployment blocker):** `Authlib` 1.8.0 → **1.9.1** and
   `certifi` 2026.7.22 → **2026.10.18** (PYSEC-2026-4355/4356,
   GHSA-6v38-4h7w-rj9h; PYSEC-2026-4320, GHSA-6q48-6c7w-9gw2).
@@ -345,16 +345,23 @@ Replit/Cloudflare-style proxies.
   the second iframe load** (Google's "response recorded" page). The first-load
   manual confirm and the 6 s fallback were removed — a student cannot mark
   attendance without submitting the form; if they run out of time the timer
-  records `False (Timeout)`. An "Open in a new tab" link remains for blocked
-  embeds.
-- **Form uses the verified email:** `build_form_url()` runs at render time:
-  it replaces a `{email}` placeholder (put it in an `entry.<id>=` param to
-  prefill an email question) and appends `authuser=<verified email>` so
-  Google opens the form with the account chosen during OAuth (when signed in).
-  The form page repeats the email and warns to switch accounts if Google
-  shows another one. Google Forms still records whatever account submits the
-  response — `authuser` is the strongest available binding; the attendance
-  DB always stores the OAuth email independently.
+  records `False (Timeout)`. When `inspect_form()` says the form does **not**
+  require sign-in, attendance is marked automatically ~1.5 s after
+  submission (no return-to-page tap); sign-in-required forms keep the manual
+  confirm.
+- **Verified email without account juggling:** Google decides an embedded
+  form's account from the browser's Google session (mobile third-party cookie
+  blocking makes that unreliable) — no URL/API can force it. Instead, at
+  session start `inspect_form()` fetches the public form and
+  `parse_form_email_entry()` finds the first short-answer/paragraph question
+  whose title mentions email; `build_form_url()` then prefills
+  `entry.<id>=<verified email>` (no manual entry-ID setup) and still appends
+  `authuser=<email>` as a fallback. Recommended form settings (surfaced in
+  the dashboard): **Do not collect email addresses**, no "Limit to 1
+  response"/org restriction, plus a required short-answer **Email** question
+  — the response then carries the OAuth email with no account chooser.
+  `inspect_form()` also flags sign-in-required forms (real login page or
+  accounts.google.com redirect) so the admin sees a warning at start.
 - **Default form timeout:** `DEFAULT_FORM_TIMEOUT` env (blank/non-numeric →
   `300`) is pre-filled in the Session Config and is the server-side fallback
   when `/api/admin/start` receives `timeout <= 0`.
@@ -364,11 +371,13 @@ Replit/Cloudflare-style proxies.
   status + detail, and `GET /api/admin/diagnostics` (authed) reports
   `storage`, `database_url_set`, `psycopg_installed`, `base_dir`,
   `db_connect_ok` and `db_error` without leaking secrets.
-- **Verified:** TestClient 27 checks — login/logout gate, timeout prefill +
+- **Verified:** TestClient 31 checks — login/logout gate, timeout prefill +
   env override (600/blank/junk), timeout-0 fallback, admin-IP capture,
   geofence (local match, iPhone public/admin match, comma prefixes,
-  off-network block), strict form template, `build_form_url()` (`{email}` +
-  `authuser`, keeps params/fragment); `Authlib 1.9.1` import clean.
+  off-network block), strict/auto-mark form template, form email parser,
+  `build_form_url()` (`{email}`, detected entry, `authuser`, keeps
+  params/fragment), live public-form sign-in false-positive check;
+  `Authlib 1.9.1` import clean.
 
 ---
 
@@ -376,7 +385,7 @@ Replit/Cloudflare-style proxies.
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage + `build_form_url` (94–156), admin API incl. login/logout/start/diagnostics (165–327), `/scan` (330–377), network verify (379–418), OAuth (421–473), form APIs (475–491), finalize (494–529) |
+| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage + form inspection/binding (101–216), admin API incl. login/logout/start/diagnostics (223–390), `/scan` (393–440), network verify (442–481), OAuth (484–538), form APIs (540–556), finalize (559–594) |
 | `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()` |
 | `templates/form.html` | Form iframe, timer, confirm button, new-tab fallback |
 | `templates/network_check.html` | WebRTC detection (skipped on iOS) + POST `/api/verify-network` |
@@ -547,11 +556,12 @@ LOCUST_NO_WAIT=1 ... # same, ceiling mode
 3. **`consumed_tokens` grows for 24 h** — fine now (pruned), but if state
    moves to a store, keep the TTL.
 4. No automated tests — the §6 simulation is the seed for a real suite.
-5. `form.html` confirm UX still watches iframe load events (2nd load =
-   submitted). This is the strict gate requested; a Google redirect can
-   occasionally look like a submission, and embeds opened in a new tab can
-   only finish via the timeout (`False (Timeout)`). Google UI changes can
-   always alter the auto-detect.
+5. `form.html` still watches iframe load events (2nd load = submitted).
+   Auto-mark is enabled only when `inspect_form()` did not detect a sign-in
+   requirement; embeds opened in a new tab can only finish via the timeout
+   (`False (Timeout)`). Email-field auto-detection parses Google's
+   `FB_PUBLIC_LOAD_DATA_` blob — if Google changes it, use the `{email}`
+   placeholder or a manual `entry.<id>=` param.
 6. Attendance CSV column "Device Fingerprint" exposes raw `device_id` —
    intentional for auditing; don't log it anywhere public.
 7. **No login rate-limiting** — explicit logout now exists (§3.12) and auth

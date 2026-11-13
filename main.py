@@ -11,9 +11,14 @@ import time
 import os
 import secrets
 import io
+import asyncio
 import csv
+import json
+import re
 import traceback
 from urllib.parse import quote, urlsplit, urlunsplit
+
+import httpx
 
 os.environ["AUTHLIB_INSECURE_TRANSPORT"] = "1"
 
@@ -72,6 +77,8 @@ session_state = {
     "timeout": int(DEFAULT_FORM_TIMEOUT),
     "allowed_ip": "",
     "admin_public_ip": "",
+    "form_email_entry": "",
+    "form_signin_required": False,
     "db_file": "",
     "db_table": "",
     "session_name": ""
@@ -111,19 +118,70 @@ def safe_db_error(exc):
         msg = msg.replace(DATABASE_URL, "***")
     return msg[:500]
 
-def build_form_url(url, email):
+def parse_form_email_entry(html):
+    """Find the entry ID of the first short-answer/paragraph question whose
+    title mentions email, using Google Forms' public page data blob."""
+    marker = "FB_PUBLIC_LOAD_DATA_"
+    idx = html.find(marker)
+    if idx == -1:
+        return ""
+    start = html.find("[", idx)
+    if start == -1:
+        return ""
+    try:
+        data, _ = json.JSONDecoder().raw_decode(html, start)
+        items = data[1][1] or []
+    except (ValueError, IndexError, TypeError):
+        return ""
+    for item in items:
+        try:
+            title = item[1] or ""
+            qtype = item[3]
+            entries = item[4]
+            entry_id = entries[0][0] if entries and entries[0] else None
+        except (IndexError, TypeError):
+            continue
+        if isinstance(title, str) and entry_id and qtype in (0, 1) and re.search(r"e-?mail", title, re.IGNORECASE):
+            return str(entry_id)
+    return ""
+
+def inspect_form(form_url):
+    """Return (email_entry_id, signin_required) for a Google Form URL."""
+    if not form_url:
+        return "", False
+    try:
+        resp = httpx.get(
+            form_url,
+            timeout=5.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; attendance-app)"},
+        )
+        if "accounts.google.com" in str(resp.url):
+            return "", True
+        if resp.status_code != 200:
+            return "", False
+        # Public forms show a "Sign in to Google" footer link — only the real
+        # login page (identifier field) means the form itself requires auth.
+        return parse_form_email_entry(resp.text), 'id="identifierId"' in resp.text
+    except Exception:
+        return "", False
+
+def build_form_url(url, email, email_entry=""):
     """Bind the form to the OAuth-verified email.
 
-    - Replaces a `{email}` placeholder (use it in an `entry.<id>=` param to
-      prefill the form's email question).
+    - Replaces a `{email}` placeholder.
+    - Prefills the detected email question (`entry.<id>`) with the email.
     - Adds/replaces `authuser=<email>` so Google opens the form with that
       account selected when it is signed in to the browser.
     """
     encoded = quote(email, safe="")
     url = url.replace("{email}", encoded)
     parts = urlsplit(url)
-    # Drop any existing authuser (keep every other param verbatim), then append.
     params = [p for p in parts.query.split("&") if p and p.split("=", 1)[0].lower() != "authuser"]
+    if email_entry:
+        entry_key = f"entry.{email_entry}"
+        params = [p for p in params if p.split("=", 1)[0] != entry_key]
+        params.append(f"{entry_key}={encoded}")
     params.append(f"authuser={encoded}")
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "&".join(params), parts.fragment))
 
@@ -207,6 +265,9 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
     session_state["timeout"] = req.timeout if req.timeout and req.timeout > 0 else int(DEFAULT_FORM_TIMEOUT)
     session_state["allowed_ip"] = req.allowed_ip.strip()
     session_state["admin_public_ip"] = get_client_ip(request)
+    session_state["form_email_entry"], session_state["form_signin_required"] = await asyncio.to_thread(
+        inspect_form, session_state["form_url"]
+    )
     session_state["session_name"] = f"Attendance_{stamp}"
 
     if USE_POSTGRES:
@@ -243,7 +304,9 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
         raise HTTPException(status_code=500, detail=f"Could not initialize {storage} storage: {safe_db_error(exc)}")
 
     return {"status": "started", "storage": "postgres" if USE_POSTGRES else "sqlite",
-            "db_file": session_state["db_file"], "db_table": session_state["db_table"]}
+            "db_file": session_state["db_file"], "db_table": session_state["db_table"],
+            "form_email_entry": session_state["form_email_entry"],
+            "form_signin_required": session_state["form_signin_required"]}
 
 @app.get("/api/admin/diagnostics")
 async def admin_diagnostics(authorized: bool = Depends(verify_admin)):
@@ -464,8 +527,10 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
     return templates.TemplateResponse(request=request, name="form.html", context={
         "email": email, 
         "form_token": form_token, 
-        "form_url": build_form_url(session_state["form_url"], email),
-        "timeout_seconds": session_state["timeout"]
+        "form_url": build_form_url(session_state["form_url"], email, session_state.get("form_email_entry", "")),
+        "timeout_seconds": session_state["timeout"],
+        "signin_required": session_state.get("form_signin_required", False),
+        "email_prefilled": bool(session_state.get("form_email_entry")),
     })
 
 # Track which form tokens have been confirmed as submitted

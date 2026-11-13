@@ -133,9 +133,14 @@ All configuration is via environment variables:
    the session immediately; it does not stop a running attendance session.
 2. Fill Session Config (env defaults are pre-filled where set):
    - **Google Form URL** — from `DEFAULT_FORM_URL`; leave empty to skip
-     the form step entirely. Put `{email}` in an entry parameter to prefill
-     the verified email (e.g. `&entry.123456={email}`); the form also opens
-     with the student's chosen Google account (`authuser`).
+     the form step entirely. At start the app fetches the form and
+     auto-detects an email question (first short-answer/paragraph question
+     whose title mentions "email"), prefilling it with the verified email;
+     `authuser` is added as a fallback. For a smooth flow, in the form
+     settings choose **Do not collect email addresses**, turn off **Limit to
+     1 response** and any org restriction, and add a required short-answer
+     **Email** question — students then never see an account chooser. (A
+     manual `{email}` placeholder / `entry.<id>=` param still works.)
    - **Form Timeout** — seconds a student gets to fill the form (enabled
      once a form URL is present); defaults to `DEFAULT_FORM_TIMEOUT` (300 s).
    - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it,
@@ -151,10 +156,12 @@ All configuration is via environment variables:
 ### Student
 1. Scan the QR → optional WiFi check page → redirected to Google.
 2. Sign in with the allowed college account.
-3. If a form is configured: submit the embedded form **as the account shown
-   on the page**. The **Confirm Attendance** button only appears after
-   Google records the response — you cannot confirm without submitting. If
-   you run out of time, the timer finalizes the mark as `False (Timeout)`.
+3. If a form is configured: submit the embedded form. Your verified email
+   is pre-filled (no account choosing needed). Attendance is marked
+   automatically once Google records the response; if the form requires
+   sign-in, a **Confirm Attendance** button appears instead. You cannot be
+   marked without submitting — if you run out of time, the timer records
+   `False (Timeout)`.
 4. Success screen shows the recorded email.
 
 ---
@@ -242,6 +249,8 @@ Full analysis and bottleneck discussion: see `WORK.md`.
 | `command not found: uvicorn` after moving/renaming the project folder | venvs embed absolute paths — recreate it: `python3 -m venv venv --clear && pip install -r requirements.txt` |
 | Second phone gets "already scanned" | You are running **old code** — `consumed_tokens` must be a dict keyed by `(nonce, device_id)`. Restart/redeploy. |
 | "Use your @... account" | Signed into the wrong Google account. |
+| Form asks to choose/sign in with a Google account | In the form settings: **Do not collect email addresses**, turn off **Limit to 1 response** and org restrictions, and add a short-answer **Email** question. The app detects and pre-fills it, so no account chooser is needed. |
+| Form response shows a different email | The form records its own account/question. Fix the form settings above; the attendance database always stores the OAuth-verified email regardless. |
 | "Device not verified" | Cookies blocked, or the QR expired before finishing — scan again. |
 | WiFi check fails on cellular/VPN | Prefix check needs the campus WiFi; clear the IP field to disable the restriction. |
 | iPhone says WiFi IP "not detected" | Expected — iOS hides local IPs. The public IP is used instead (same campus network as the instructor passes automatically); clear the IP field if it still blocks. |

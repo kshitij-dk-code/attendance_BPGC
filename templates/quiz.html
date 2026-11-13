@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendance Quiz</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+            --card: rgba(255, 255, 255, 0.05);
+            --card-border: rgba(255, 255, 255, 0.12);
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.35);
+            --primary-hover: #4f46e5;
+            --success: #22c55e;
+            --error: #ef4444;
+            --radius: 24px;
+            --transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            min-height: 100%;
+            background: var(--bg);
+            background-attachment: fixed;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text);
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 20% 25%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+                radial-gradient(circle at 80% 75%, rgba(139, 92, 246, 0.12) 0%, transparent 45%);
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 90px 20px 150px;
+        }
+
+        #timer-bar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--card-border);
+            padding: 14px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            box-shadow: 0 10px 30px -10px rgba(0,0,0,0.4);
+        }
+
+        #timer-bar .label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        #timer-bar .time {
+            font-family: 'Space Mono', monospace;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .time .dot {
+            width: 8px; height: 8px;
+            background: var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--primary-glow);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.3); }
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 22px;
+            max-width: 720px;
+            width: 100%;
+        }
+
+        .header h2 {
+            font-size: clamp(1.2rem, 3vw, 1.6rem);
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #fff 60%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .form-desc {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+
+        .email-chip {
+            display: inline-flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 4px 8px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            font-size: clamp(0.75rem, 3vw, 0.9rem);
+            color: var(--text-muted);
+            font-weight: 500;
+            max-width: 100%;
+            text-align: center;
+        }
+
+        .email-chip strong {
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.68rem, 2.8vw, 0.82rem);
+            font-weight: 700;
+            word-break: break-all;
+        }
+
+        .email-note {
+            margin-top: 8px;
+            font-size: clamp(0.72rem, 2.6vw, 0.82rem);
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        #quiz-form {
+            width: 100%;
+            max-width: 720px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .question-card {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 18px;
+            padding: 18px 20px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        .q-title {
+            display: block;
+            font-size: 1rem;
+            font-weight: 600;
+            line-height: 1.45;
+            margin-bottom: 4px;
+        }
+
+        .q-title .req { color: #f87171; margin-left: 2px; }
+
+        .q-desc {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            line-height: 1.45;
+            margin-bottom: 10px;
+        }
+
+        .q-input, .q-textarea, .q-select {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1.5px solid rgba(255,255,255,0.18);
+            background: rgba(0,0,0,0.3);
+            color: var(--text);
+            font-size: 0.95rem;
+            font-family: inherit;
+            outline: none;
+            transition: var(--transition);
+        }
+
+        .q-input:focus, .q-textarea:focus, .q-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .q-textarea { min-height: 90px; resize: vertical; }
+
+        .q-select option { background: #1e1b4b; color: var(--text); }
+
+        .option {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 9px 10px;
+            margin: 2px -10px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.92rem;
+            line-height: 1.4;
+            transition: background 0.15s ease;
+        }
+
+        .option:hover { background: rgba(255,255,255,0.05); }
+
+        .option input {
+            margin-top: 3px;
+            accent-color: var(--primary);
+            width: 17px;
+            height: 17px;
+            flex: 0 0 auto;
+        }
+
+        .action-bar {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid var(--card-border);
+            padding: 16px 24px;
+            z-index: 100;
+            box-shadow: 0 -20px 40px -10px rgba(0,0,0,0.4);
+        }
+
+        .action-bar-inner {
+            max-width: 720px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        .status.error { color: #fca5a5; }
+        .status.success { color: var(--success); }
+
+        #submit-btn {
+            width: 100%;
+            max-width: 420px;
+            padding: 14px 30px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: 0 15px 35px -10px var(--primary-glow);
+            letter-spacing: 0.02em;
+        }
+
+        #submit-btn:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        #submit-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #success-box {
+            display: none;
+            width: 100%;
+            max-width: 720px;
+            text-align: center;
+            background: rgba(34, 197, 94, 0.08);
+            border: 1px solid rgba(34, 197, 94, 0.35);
+            border-radius: var(--radius);
+            padding: 36px 24px;
+        }
+
+        #success-box h3 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--success);
+            margin-bottom: 10px;
+        }
+
+        #success-box p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        #success-box strong {
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            word-break: break-all;
+        }
+
+        #finalize-form { display: none; }
+
+        @media (max-width: 640px) {
+            #timer-bar { padding: 12px 16px; flex-direction: column; gap: 6px; align-items: flex-start; }
+            .page { padding-top: 100px; padding-bottom: 160px; }
+            .question-card { padding: 16px; }
+            .action-bar { padding: 14px 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="timer-bar">
+        <span class="label">⏳ Time Remaining</span>
+        <span class="time"><span id="time-left">{{ timeout_seconds }}</span> s <span class="dot"></span></span>
+    </div>
+
+    <div class="page">
+        <div class="header">
+            <h2>{{ quiz.title or "Quiz" }}</h2>
+            {% if quiz.description %}<p class="form-desc">{{ quiz.description }}</p>{% endif %}
+            <div class="email-chip">Logged in as <strong>{{ email }}</strong></div>
+            <div class="email-note">Your verified email is recorded with these answers — it is not an editable field.</div>
+        </div>
+
+        <form id="quiz-form" onsubmit="event.preventDefault(); submitQuiz();">
+            {% for q in questions %}
+            <div class="question-card" data-question="{{ q.entry }}">
+                <label class="q-title">{{ q.title }}{% if q.required %}<span class="req">*</span>{% endif %}</label>
+                {% if q.description %}<p class="q-desc">{{ q.description }}</p>{% endif %}
+
+                {% if q.type == 0 %}
+                <input class="q-input" type="text" data-answer="{{ q.entry }}" autocomplete="off" {% if q.required %}required{% endif %}>
+                {% elif q.type == 1 %}
+                <textarea class="q-textarea" data-answer="{{ q.entry }}" {% if q.required %}required{% endif %}></textarea>
+                {% elif q.type in (2, 5) %}
+                {% for opt in q.options %}
+                <label class="option"><input type="radio" name="q_{{ q.entry }}" value="{{ opt }}" {% if q.required %}required{% endif %}> <span>{{ opt }}</span></label>
+                {% endfor %}
+                {% elif q.type == 3 %}
+                <select class="q-select" name="q_{{ q.entry }}" {% if q.required %}required{% endif %}>
+                    <option value="">Choose…</option>
+                    {% for opt in q.options %}<option value="{{ opt }}">{{ opt }}</option>{% endfor %}
+                </select>
+                {% elif q.type == 4 %}
+                {% for opt in q.options %}
+                <label class="option"><input type="checkbox" name="q_{{ q.entry }}" value="{{ opt }}"> <span>{{ opt }}</span></label>
+                {% endfor %}
+                {% endif %}
+            </div>
+            {% endfor %}
+
+            {% if questions | length == 0 %}
+            <div class="question-card"><p class="q-desc">No questions — submit to mark attendance.</p></div>
+            {% endif %}
+        </form>
+
+        <div id="success-box">
+            <h3>✅ Attendance Marked!</h3>
+            <p>Your answers were recorded against <strong id="success-email">{{ email }}</strong>.</p>
+        </div>
+    </div>
+
+    <div class="action-bar">
+        <div class="action-bar-inner">
+            <p id="status-text" class="status">Answer the questions and submit before the timer runs out.</p>
+            <button id="submit-btn" type="button" onclick="submitQuiz()">Submit Quiz &amp; Mark Attendance</button>
+        </div>
+    </div>
+
+    <form id="finalize-form" action="/finalize-attendance?token={{ form_token }}" method="POST">
+        <input type="hidden" name="form_submitted" value="False (Timeout)">
+    </form>
+
+    <script>
+        const questions = {{ questions | tojson }};
+        const formToken = "{{ form_token }}";
+        const statusText = document.getElementById('status-text');
+        const submitBtn = document.getElementById('submit-btn');
+        let finalized = false;
+        let submitting = false;
+        let timeLeft = parseInt("{{ timeout_seconds }}") || 300;
+
+        function collectAnswers() {
+            const answers = {};
+            for (const q of questions) {
+                if (q.is_email) continue;
+                if (q.type === 0 || q.type === 1) {
+                    const el = document.querySelector('[data-answer="' + q.entry + '"]');
+                    answers[q.entry] = el ? el.value.trim() : "";
+                } else if (q.type === 2 || q.type === 3 || q.type === 5) {
+                    const el = document.querySelector('input[name="q_' + q.entry + '"]:checked, select[name="q_' + q.entry + '"]');
+                    answers[q.entry] = el ? el.value : "";
+                } else if (q.type === 4) {
+                    answers[q.entry] = Array.from(document.querySelectorAll('input[name="q_' + q.entry + '"]:checked')).map(e => e.value);
+                }
+            }
+            return answers;
+        }
+
+        async function submitQuiz() {
+            if (finalized || submitting) return;
+            const formEl = document.getElementById('quiz-form');
+            if (formEl && !formEl.reportValidity()) return;
+            submitting = true;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting…';
+            statusText.className = 'status';
+            statusText.textContent = 'Sending your answers…';
+            try {
+                const resp = await fetch('/api/quiz/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: formToken, answers: collectAnswers() })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok) {
+                    finalized = true;
+                    clearInterval(countdown);
+                    document.getElementById('quiz-form').style.display = 'none';
+                    document.getElementById('success-box').style.display = 'block';
+                    document.getElementById('success-email').textContent = data.email || "{{ email }}";
+                    statusText.className = 'status success';
+                    statusText.textContent = 'Answers recorded. You can close this page.';
+                    submitBtn.style.display = 'none';
+                } else {
+                    const detail = data.detail || ('Submission failed (' + resp.status + ')');
+                    statusText.className = 'status error';
+                    statusText.textContent = detail;
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit Quiz & Mark Attendance';
+                    submitting = false;
+                    if (/time is up/i.test(detail)) finalizeTimeout();
+                }
+            } catch (e) {
+                statusText.className = 'status error';
+                statusText.textContent = 'Network error — please try again.';
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit Quiz & Mark Attendance';
+                submitting = false;
+            }
+        }
+
+        function finalizeTimeout() {
+            if (finalized) return;
+            finalized = true;
+            clearInterval(countdown);
+            document.getElementById('finalize-form').submit();
+        }
+
+        const countdown = setInterval(() => {
+            timeLeft--;
+            document.getElementById('time-left').textContent = Math.max(timeLeft, 0);
+            if (timeLeft <= 0) {
+                if (submitting) {
+                    clearInterval(countdown);
+                } else {
+                    finalizeTimeout();
+                }
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

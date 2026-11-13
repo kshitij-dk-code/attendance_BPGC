@@ -450,6 +450,20 @@
             text-align: left;
         }
 
+        .form-check {
+            display: none;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            margin-top: 8px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            text-align: left;
+        }
+        .form-check.pending { display: block; color: var(--text-muted); }
+        .form-check.ok { display: block; color: #4ade80; background: rgba(74, 222, 128, 0.08); }
+        .form-check.warn { display: block; color: #fbbf24; background: rgba(251, 191, 36, 0.08); }
+        .form-check.error { display: block; color: var(--error); background: rgba(239, 68, 68, 0.08); }
+
         input[type="text"],
         input[type="url"],
         input[type="number"] {
@@ -584,9 +598,10 @@
                 <div class="divider"></div>
 
                 <div class="input-group">
-                    <label>Google Form Embed URL (Optional)</label>
-                    <input type="url" id="form-url-input" value="{{ default_form_url }}" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
-                    <small>For automatic submissions: in the form settings choose <strong>Do not collect email addresses</strong>, turn off "Limit to 1 response", and add a short-answer <strong>Email</strong> question — it is detected and prefilled with the verified email. (<code>{email}</code> in an entry parameter still works as a manual override.)</small>
+                    <label>Google Form URL (Native quiz / embedded fallback)</label>
+                    <input type="url" id="form-url-input" value="{{ default_form_url }}" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout(); scheduleFormCheck()">
+                    <small>Native quiz mode: the app reads this form's questions, renders them in-app, hides the Email question, and submits the verified email server-side — responses still appear in the Google Sheet. Requires <strong>Do not collect email addresses</strong>, no "Limit to 1 response", and a short-answer <strong>Email</strong> question. Unsupported forms fall back to the embedded iframe.</small>
+                    <div id="form-check" class="form-check"></div>
                 </div>
 
                 <div class="input-group">
@@ -627,6 +642,45 @@
         function toggleTimeout() {
             const formUrl = document.getElementById('form-url-input').value;
             document.getElementById('timeout-input').disabled = (formUrl.trim() === "");
+        }
+
+        let formCheckTimer = null;
+        function scheduleFormCheck() {
+            clearTimeout(formCheckTimer);
+            formCheckTimer = setTimeout(checkForm, 700);
+        }
+
+        async function checkForm() {
+            const el = document.getElementById('form-check');
+            const url = document.getElementById('form-url-input').value.trim();
+            if (!url) { el.className = 'form-check'; el.textContent = ''; return; }
+            el.className = 'form-check pending';
+            el.textContent = 'Checking form…';
+            try {
+                const r = await fetch('/api/admin/inspect-form', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ form_url: url })
+                });
+                if (r.status === 401) { el.className = 'form-check'; el.textContent = ''; return; }
+                const d = await r.json().catch(() => ({}));
+                if (d.signin_required) {
+                    el.className = 'form-check error';
+                    el.innerHTML = '⚠ This form requires Google sign-in, so native mode is unavailable. In the form settings choose <strong>Do not collect email addresses</strong>, turn off <strong>Limit to 1 response</strong>, and add a short-answer <strong>Email</strong> question.';
+                } else if (d.native_ok) {
+                    el.className = 'form-check ok';
+                    el.textContent = '✓ Native quiz ready — ' + d.question_count + ' question' + (d.question_count === 1 ? '' : 's') + '. The Email question is hidden and filled server-side; answers still go to the Google Sheet.';
+                } else if (d.email_entry) {
+                    el.className = 'form-check warn';
+                    el.textContent = '⚠ Embedded form mode: ' + (d.native_reason || 'native mode unavailable') + ' The email field is prefilled but still editable.';
+                } else {
+                    el.className = 'form-check warn';
+                    el.innerHTML = '⚠ No <strong>Email</strong> question detected — embedded responses will be <strong>anonymous</strong>. Add a required short-answer question titled “Email” to unlock native quiz mode.';
+                }
+            } catch (e) {
+                el.className = 'form-check warn';
+                el.textContent = 'Could not inspect the form (network error).';
+            }
         }
 
         async function attemptLogin() {
@@ -695,13 +749,17 @@
                     fetchToken();
                     let msg = 'Session started' + (data.storage ? ' (' + data.storage + ')' : '') + '.';
                     let isError = false;
-                    if (data.form_signin_required) {
-                        msg = '⚠ This form requires Google sign-in. Turn off "Collect email addresses" and "Limit to 1 response" so it submits automatically.';
+                    if (data.native_quiz) {
+                        msg = 'Session started — native quiz (' + data.question_count + ' question' + (data.question_count === 1 ? '' : 's') + '). The verified email is filled server-side.';
+                    } else if (data.form_signin_required) {
+                        msg = '⚠ This form requires Google sign-in, so embedded mode is used. Turn off "Collect email addresses" and "Limit to 1 response" for native mode.';
                         isError = true;
                     } else if (formUrl.trim() && data.form_email_entry) {
-                        msg = 'Session started — the verified email will be auto-filled in the form.';
+                        msg = 'Session started — embedded form mode. ' + (data.native_reason || '');
+                        isError = true;
                     } else if (formUrl.trim()) {
-                        msg = 'Session started. Tip: add a short-answer "Email" question so responses carry the verified email.';
+                        msg = '⚠ No Email question detected — responses will be anonymous. Add a required short-answer "Email" question and restart.';
+                        isError = true;
                     }
                     showToast(msg, isError);
                 } else {
@@ -815,6 +873,7 @@
         detectAdminIP();
         // Sync the Form Timeout field with any pre-filled default form URL
         toggleTimeout();
+        checkForm();
         {% endif %}
     </script>
 </body>

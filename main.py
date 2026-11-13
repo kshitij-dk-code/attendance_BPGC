@@ -16,7 +16,7 @@ import csv
 import json
 import re
 import traceback
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -79,6 +79,9 @@ session_state = {
     "admin_public_ip": "",
     "form_email_entry": "",
     "form_signin_required": False,
+    "form_view_url": "",
+    "quiz": None,
+    "native_reason": "",
     "db_file": "",
     "db_table": "",
     "session_name": ""
@@ -118,53 +121,223 @@ def safe_db_error(exc):
         msg = msg.replace(DATABASE_URL, "***")
     return msg[:500]
 
-def parse_form_email_entry(html):
-    """Find the entry ID of the first short-answer/paragraph question whose
-    title mentions email, using Google Forms' public page data blob."""
+# Google Forms question type codes (reverse engineered from the public blob).
+# 0 short, 1 paragraph, 2 radio, 3 dropdown, 4 checkboxes, 5 linear scale.
+FORM_QUESTION_TYPES = {0: "short", 1: "paragraph", 2: "radio", 3: "dropdown", 4: "checkbox", 5: "scale"}
+
+def parse_form_structure(html):
+    """Parse Google Forms' FB_PUBLIC_LOAD_DATA_ blob into a renderable quiz.
+
+    Returns a dict with title/description/items, the email entry (if any),
+    and flags that make native mode unsafe (multi-page, unsupported types,
+    "Other" options).
+    """
+    result = {
+        "ok": False, "title": "", "description": "", "items": [],
+        "email_entry": "", "multi_page": False, "unsupported_types": [],
+        "has_other": False,
+    }
     marker = "FB_PUBLIC_LOAD_DATA_"
     idx = html.find(marker)
     if idx == -1:
-        return ""
+        return result
     start = html.find("[", idx)
     if start == -1:
-        return ""
+        return result
     try:
         data, _ = json.JSONDecoder().raw_decode(html, start)
-        items = data[1][1] or []
+        meta = data[1]
+        items_raw = meta[1] or []
+        result["title"] = meta[8] if len(meta) > 8 and isinstance(meta[8], str) else ""
+        result["description"] = meta[0] if meta and isinstance(meta[0], str) else ""
     except (ValueError, IndexError, TypeError):
-        return ""
-    for item in items:
-        try:
-            title = item[1] or ""
-            qtype = item[3]
-            entries = item[4]
-            entry_id = entries[0][0] if entries and entries[0] else None
-        except (IndexError, TypeError):
+        return result
+    result["ok"] = True
+
+    for raw in items_raw:
+        if not isinstance(raw, list) or len(raw) < 5:
             continue
-        if isinstance(title, str) and entry_id and qtype in (0, 1) and re.search(r"e-?mail", title, re.IGNORECASE):
-            return str(entry_id)
-    return ""
+        qtype = raw[3] if isinstance(raw[3], int) else None
+        title = raw[1] if isinstance(raw[1], str) else ""
+        desc = raw[2] if len(raw) > 2 and isinstance(raw[2], str) else ""
+        if qtype == 6:       # section title / description block
+            continue
+        if qtype == 8:       # page break
+            result["multi_page"] = True
+            continue
+        if qtype in (11, 12):  # image / video
+            continue
+        if qtype not in FORM_QUESTION_TYPES:
+            result["unsupported_types"].append(qtype if qtype is not None else -1)
+            continue
+        entries = raw[4] if isinstance(raw[4], list) else []
+        if not entries:
+            continue
+        sub = entries[0]
+        if not isinstance(sub, list) or not sub:
+            continue
+        entry_id = sub[0] if isinstance(sub[0], int) else None
+        options = []
+        if len(sub) > 1 and isinstance(sub[1], list):
+            for opt in sub[1]:
+                if isinstance(opt, list) and opt and isinstance(opt[0], str):
+                    options.append(opt[0])
+                    if opt[0].strip().lower() == "other":
+                        result["has_other"] = True
+        required = bool(sub[2]) if len(sub) > 2 else False
+        if entry_id is None:
+            continue
+        result["items"].append({
+            "entry": str(entry_id), "title": title or "Question",
+            "description": desc, "type": qtype,
+            "options": options, "required": required, "is_email": False,
+        })
+
+    for item in result["items"]:
+        if not result["email_entry"] and item["type"] in (0, 1) and re.search(r"e-?mail", item["title"], re.IGNORECASE):
+            result["email_entry"] = item["entry"]
+            item["is_email"] = True
+    return result
+
+def parse_form_email_entry(html):
+    """Find the entry ID of the first short-answer/paragraph email question."""
+    return parse_form_structure(html)["email_entry"]
+
+def derive_form_response_url(view_url):
+    """Turn a /viewform URL (or forms.gle result) into /formResponse."""
+    match = re.search(r"https://docs\.google\.com/forms/(?:u/\d+/)?d/e/([^/?#]+)", view_url)
+    if match:
+        return f"https://docs.google.com/forms/d/e/{match.group(1)}/formResponse"
+    if "/viewform" in view_url:
+        return view_url.replace("/viewform", "/formResponse")
+    return view_url.rstrip("/") + "/formResponse"
+
+def native_suitability(form, signin_required):
+    """Can this form be rendered natively (email hidden + filled server-side)?"""
+    if signin_required:
+        return False, "Form requires Google sign-in — turn off 'Collect email addresses' and 'Limit to 1 response'."
+    if not form or not form.get("ok"):
+        return False, "Could not read the form structure."
+    if form.get("multi_page"):
+        return False, "Multi-page forms are not supported in native mode."
+    if form.get("unsupported_types"):
+        types = sorted({t for t in form["unsupported_types"] if t != -1})
+        return False, f"Unsupported question types: {types}."
+    if form.get("has_other"):
+        return False, "Forms with an 'Other' option are not supported in native mode."
+    if not form.get("email_entry"):
+        return False, "Add a short-answer Email question (mark it required) so responses carry the verified email."
+    return True, ""
 
 def inspect_form(form_url):
-    """Return (email_entry_id, signin_required) for a Google Form URL."""
+    """Fetch a Google Form and return its structure + native-mode verdict."""
+    result = {
+        "email_entry": "", "signin_required": False, "view_url": form_url,
+        "response_url": "", "quiz": None, "native_ok": False,
+        "native_reason": "No form URL.",
+    }
     if not form_url:
-        return "", False
+        return result
     try:
         resp = httpx.get(
             form_url,
-            timeout=5.0,
+            timeout=10.0,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (compatible; attendance-app)"},
         )
-        if "accounts.google.com" in str(resp.url):
-            return "", True
-        if resp.status_code != 200:
-            return "", False
-        # Public forms show a "Sign in to Google" footer link — only the real
-        # login page (identifier field) means the form itself requires auth.
-        return parse_form_email_entry(resp.text), 'id="identifierId"' in resp.text
     except Exception:
-        return "", False
+        result["native_reason"] = "Could not fetch the form (network error)."
+        return result
+
+    result["view_url"] = str(resp.url)
+    if "accounts.google.com" in str(resp.url):
+        result["signin_required"] = True
+        result["native_reason"] = "Form requires Google sign-in."
+        return result
+    if resp.status_code != 200:
+        result["native_reason"] = f"Could not fetch the form (HTTP {resp.status_code})."
+        return result
+
+    # Public forms show a "Sign in to Google" footer link — only the real
+    # login page (identifier field) means the form itself requires auth.
+    result["signin_required"] = 'id="identifierId"' in resp.text
+    form = parse_form_structure(resp.text)
+    result["quiz"] = form
+    result["email_entry"] = form["email_entry"]
+    result["response_url"] = derive_form_response_url(result["view_url"])
+    result["native_ok"], result["native_reason"] = native_suitability(form, result["signin_required"])
+    return result
+
+def build_form_response_data(form, answers, email):
+    """Build the entry.* tuples Google expects (email always server-side)."""
+    data = []
+    for item in form["items"]:
+        entry = item["entry"]
+        if item.get("is_email"):
+            values = [email]
+        else:
+            value = answers.get(entry)
+            if value in (None, "", []):
+                continue
+            if item["type"] == 4:
+                values = value if isinstance(value, list) else [value]
+            else:
+                values = value if isinstance(value, list) else [value]
+        for value in values:
+            data.append((f"entry.{entry}", str(value)))
+    data.extend([("fvv", "1"), ("pageHistory", "0")])
+    return data
+
+def submit_to_google(view_url, payload):
+    """POST answers to the public Google Form endpoint.
+
+    Returns (ok, detail). Google's endpoint is undocumented; a 200 without
+    error markers is treated as success, but the explicit "recorded" page is
+    preferred. Caller must not mark attendance when ok is False.
+    """
+    response_url = derive_form_response_url(view_url)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
+        "Referer": view_url,
+    }
+    try:
+        with httpx.Client(follow_redirects=True, timeout=15.0, headers=headers) as client:
+            page = client.get(view_url)
+            if page.status_code != 200:
+                return False, f"could not load the form (HTTP {page.status_code})"
+            fbzx = re.search(r'name="fbzx" value="([^"]+)"', page.text)
+            body = list(payload)
+            if fbzx:
+                body.append(("fbzx", fbzx.group(1)))
+            body.append(("submit", "Submit"))
+            resp = client.post(
+                response_url,
+                content=urlencode(body),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            text = resp.text.lower()
+            if resp.status_code >= 400:
+                if "required question" in text:
+                    return False, "Google rejected the response: a required question is missing"
+                if "no longer accepting" in text:
+                    return False, "the form is no longer accepting responses"
+                if "sign in" in text:
+                    return False, "the form requires Google sign-in"
+                return False, f"Google rejected the response (HTTP {resp.status_code})"
+            if "accounts.google.com" in str(resp.url) or 'id="identifierid"' in text:
+                return False, "the form requires Google sign-in"
+            if "required question" in text or "data-validation-failed" in text:
+                return False, "Google rejected the response: a required question is missing"
+            if "no longer accepting" in text:
+                return False, "the form is no longer accepting responses"
+            if "recorded" in text or "submitted" in text or "thanks" in text:
+                return True, ""
+            # Localized success pages may not contain the English marker.
+            print(f"Google form submit: HTTP {resp.status_code} without a success marker")
+            return True, ""
+    except Exception as exc:
+        return False, safe_db_error(exc)
 
 def build_form_url(url, email, email_entry=""):
     """Bind the form to the OAuth-verified email.
@@ -219,6 +392,13 @@ class StartSessionRequest(BaseModel):
 class LoginRequest(BaseModel):
     password: str
 
+class InspectFormRequest(BaseModel):
+    form_url: str
+
+class QuizSubmitRequest(BaseModel):
+    token: str
+    answers: dict
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
     # The dashboard HTML (with its prefilled default form URL / timer / IP) is
@@ -265,9 +445,14 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
     session_state["timeout"] = req.timeout if req.timeout and req.timeout > 0 else int(DEFAULT_FORM_TIMEOUT)
     session_state["allowed_ip"] = req.allowed_ip.strip()
     session_state["admin_public_ip"] = get_client_ip(request)
-    session_state["form_email_entry"], session_state["form_signin_required"] = await asyncio.to_thread(
-        inspect_form, session_state["form_url"]
-    )
+    details = await asyncio.to_thread(inspect_form, session_state["form_url"])
+    if details.get("view_url"):
+        session_state["form_url"] = details["view_url"]
+    session_state["form_view_url"] = details.get("view_url", session_state["form_url"])
+    session_state["form_email_entry"] = details.get("email_entry", "")
+    session_state["form_signin_required"] = details.get("signin_required", False)
+    session_state["quiz"] = details.get("quiz") if details.get("native_ok") else None
+    session_state["native_reason"] = details.get("native_reason", "")
     session_state["session_name"] = f"Attendance_{stamp}"
 
     if USE_POSTGRES:
@@ -279,7 +464,8 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
                   device_id TEXT UNIQUE,
                   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   form_submitted TEXT,
-                  ip_address TEXT)'''
+                  ip_address TEXT,
+                  quiz_answers TEXT)'''
     else:
         session_state["db_table"] = ""
         session_state["db_file"] = os.path.join(BASE_DIR, f"Attendance_{stamp}.db")
@@ -289,7 +475,8 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
                   device_id TEXT UNIQUE,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                   form_submitted TEXT,
-                  ip_address TEXT)'''
+                  ip_address TEXT,
+                  quiz_answers TEXT)'''
 
     try:
         conn = db_connect()
@@ -300,13 +487,35 @@ async def start_session(req: StartSessionRequest, request: Request, authorized: 
             conn.close()
     except Exception as exc:
         traceback.print_exc()
+        session_state["is_active"] = False
         storage = "PostgreSQL" if USE_POSTGRES else "SQLite"
         raise HTTPException(status_code=500, detail=f"Could not initialize {storage} storage: {safe_db_error(exc)}")
 
+    quiz = session_state["quiz"]
     return {"status": "started", "storage": "postgres" if USE_POSTGRES else "sqlite",
             "db_file": session_state["db_file"], "db_table": session_state["db_table"],
             "form_email_entry": session_state["form_email_entry"],
-            "form_signin_required": session_state["form_signin_required"]}
+            "form_signin_required": session_state["form_signin_required"],
+            "native_quiz": bool(quiz),
+            "question_count": len([i for i in quiz["items"] if not i.get("is_email")]) if quiz else 0,
+            "native_reason": session_state["native_reason"]}
+
+@app.post("/api/admin/inspect-form")
+async def admin_inspect_form(req: InspectFormRequest, authorized: bool = Depends(verify_admin)):
+    """Check a form before starting: native mode possible? email/sign-in?"""
+    url = req.form_url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Form URL must start with http:// or https://")
+    details = await asyncio.to_thread(inspect_form, url)
+    quiz = details.get("quiz") or {}
+    return {
+        "email_entry": details.get("email_entry", ""),
+        "signin_required": details.get("signin_required", False),
+        "native_ok": details.get("native_ok", False),
+        "native_reason": details.get("native_reason", ""),
+        "title": quiz.get("title", ""),
+        "question_count": len([i for i in quiz.get("items", []) if not i.get("is_email")]),
+    }
 
 @app.get("/api/admin/diagnostics")
 async def admin_diagnostics(authorized: bool = Depends(verify_admin)):
@@ -344,7 +553,7 @@ async def stop_session(authorized: bool = Depends(verify_admin)):
         conn = db_connect()
         try:
             c = conn.cursor()
-            c.execute(f"SELECT id, email, device_id, timestamp, form_submitted, ip_address FROM {session_table()}")
+            c.execute(f"SELECT id, email, device_id, timestamp, form_submitted, ip_address, quiz_answers FROM {session_table()}")
             rows = c.fetchall()
         finally:
             conn.close()
@@ -353,7 +562,7 @@ async def stop_session(authorized: bool = Depends(verify_admin)):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "Email", "Device Fingerprint", "Timestamp (UTC)", "Form Submitted", "IP Address"])
+    writer.writerow(["ID", "Email", "Device Fingerprint", "Timestamp (UTC)", "Form Submitted", "IP Address", "Quiz Answers"])
     for row in rows:
         writer.writerow(row)
     output.seek(0)
@@ -506,7 +715,10 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
     if not email.endswith(ALLOWED_EMAIL_DOMAIN):
         return render_status(f"Use your {ALLOWED_EMAIL_DOMAIN} account.", success=False)
     
-    form_token = serializer.dumps({"email": email, "device_id": device_id})
+    # Server-side backstop: the form may be opened in another window, so a
+    # late "submitted" signal must not confirm attendance after the timer.
+    deadline = time.time() + session_state["timeout"] + 15
+    form_token = serializer.dumps({"email": email, "device_id": device_id, "deadline": deadline})
     
     # If NO form is required, insert directly
     if not session_state["form_url"]:
@@ -524,6 +736,16 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
             return render_status("The attendance session has been closed.", success=False, email=email)
         return render_status("Attendance Marked Successfully!", success=True, email=email)
 
+    quiz = session_state.get("quiz")
+    if quiz:
+        return templates.TemplateResponse(request=request, name="quiz.html", context={
+            "email": email,
+            "form_token": form_token,
+            "quiz": quiz,
+            "questions": [i for i in quiz["items"] if not i.get("is_email")],
+            "timeout_seconds": session_state["timeout"],
+        })
+
     return templates.TemplateResponse(request=request, name="form.html", context={
         "email": email, 
         "form_token": form_token, 
@@ -540,10 +762,13 @@ form_confirmed = set()
 async def confirm_form(token: str = Form(...)):
     try:
         data = serializer.loads(token, max_age=1800)
-        form_confirmed.add(data["email"])
-        return {"status": "confirmed"}
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
+    deadline = data.get("deadline")
+    if deadline is not None and time.time() > deadline:
+        raise HTTPException(status_code=400, detail="Form time expired")
+    form_confirmed.add(data["email"])
+    return {"status": "confirmed"}
 
 @app.post("/api/form/status")
 async def form_status(token: str = Form(...)):
@@ -553,6 +778,111 @@ async def form_status(token: str = Form(...)):
         return {"confirmed": confirmed}
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+def normalize_quiz_answers(quiz, raw):
+    """Validate answers against the parsed form; email is never client-supplied."""
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="Invalid quiz answers")
+    cleaned = {}
+    for item in quiz["items"]:
+        entry = item["entry"]
+        if item.get("is_email"):
+            continue
+        qtype = item["type"]
+        value = raw.get(entry)
+        if qtype in (0, 1):
+            if not isinstance(value, str):
+                value = ""
+            value = value.strip()
+            if len(value) > 5000:
+                raise HTTPException(status_code=400, detail=f"Answer too long: {item['title']}")
+        elif qtype in (2, 3, 5):
+            if not isinstance(value, str):
+                value = ""
+            if value and value not in item["options"]:
+                raise HTTPException(status_code=400, detail=f"Invalid choice for: {item['title']}")
+        elif qtype == 4:
+            if value is None:
+                value = []
+            if not isinstance(value, list):
+                raise HTTPException(status_code=400, detail=f"Invalid choices for: {item['title']}")
+            value = [v for v in value if isinstance(v, str)]
+            if any(v not in item["options"] for v in value):
+                raise HTTPException(status_code=400, detail=f"Invalid choice for: {item['title']}")
+            value = list(dict.fromkeys(value))
+        else:
+            continue
+        if item["required"] and not value:
+            raise HTTPException(status_code=400, detail=f"Please answer: {item['title']}")
+        if value not in ("", [], None):
+            cleaned[entry] = value
+    return cleaned
+
+def quiz_answers_for_csv(quiz, answers, email):
+    row = {"Form": quiz.get("title", ""), "Email (verified)": email}
+    for item in quiz["items"]:
+        if item.get("is_email"):
+            continue
+        value = answers.get(item["entry"], "")
+        if isinstance(value, list):
+            value = "; ".join(value)
+        row[item["title"]] = value
+    return row
+
+@app.post("/api/quiz/submit")
+async def quiz_submit(req: QuizSubmitRequest, request: Request):
+    """Native quiz: validate -> forward to Google -> store against the OAuth email."""
+    quiz = session_state.get("quiz")
+    if not session_state["is_active"] or not quiz:
+        raise HTTPException(status_code=400, detail="Quiz is not active")
+    if not (session_state["db_file"] or session_state["db_table"]):
+        raise HTTPException(status_code=400, detail="Session database is not initialized")
+    try:
+        data = serializer.loads(req.token, max_age=1800)
+        email = data["email"]
+        device_id = data["device_id"]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    deadline = data.get("deadline")
+    if deadline is not None and time.time() > deadline:
+        raise HTTPException(status_code=400, detail="Time is up")
+    answers = normalize_quiz_answers(quiz, req.answers)
+
+    try:
+        conn = db_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(sql_params(f"SELECT 1 FROM {session_table()} WHERE email = ?"), (email,))
+            if cursor.fetchone():
+                raise HTTPException(status_code=409, detail="Attendance is already marked")
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except DB_ERROR:
+        raise HTTPException(status_code=400, detail="Session database is not initialized")
+
+    payload = build_form_response_data(quiz, answers, email)
+    ok, detail = await asyncio.to_thread(submit_to_google, session_state["form_view_url"], payload)
+    if not ok:
+        raise HTTPException(status_code=502, detail=f"Could not submit to Google Forms: {detail}")
+
+    stored = quiz_answers_for_csv(quiz, answers, email)
+    try:
+        conn = db_connect()
+        try:
+            conn.execute(
+                sql_params(f"INSERT INTO {session_table()} (email, device_id, form_submitted, ip_address, quiz_answers) VALUES (?, ?, ?, ?, ?)"),
+                (email, device_id, "True (Quiz)", get_client_ip(request), json.dumps(stored, ensure_ascii=False)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except DB_INTEGRITY_ERROR:
+        raise HTTPException(status_code=409, detail="Attendance is already marked")
+    except DB_ERROR:
+        raise HTTPException(status_code=400, detail="Session database is not initialized")
+    return {"status": "ok", "email": email}
 
 # Form validation requires python-multipart
 @app.post("/finalize-attendance", response_class=HTMLResponse)
@@ -576,8 +906,8 @@ async def finalize_attendance(request: Request, token: str, form_submitted: str 
     try:
         conn = db_connect()
         try:
-            conn.execute(sql_params(f"INSERT INTO {session_table()} (email, device_id, form_submitted, ip_address) VALUES (?, ?, ?, ?)"),
-                         (email, device_id, form_submitted, get_client_ip(request)))
+            conn.execute(sql_params(f"INSERT INTO {session_table()} (email, device_id, form_submitted, ip_address, quiz_answers) VALUES (?, ?, ?, ?, ?)"),
+                         (email, device_id, form_submitted, get_client_ip(request), None))
             conn.commit()
         finally:
             conn.close()

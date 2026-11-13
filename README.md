@@ -2,8 +2,9 @@
 
 A session-based classroom attendance system. The instructor opens an admin
 dashboard, starts a session, and projects a QR code; students scan it with
-their phones, sign in with their college Google account, (optionally) fill a
-Google Form, and are recorded in a per-session SQLite database. The instructor
+their phones, sign in with their college Google account, (optionally) answer
+the Google Form's questions **in-app** (native quiz), and are recorded in a
+per-session SQLite/PostgreSQL database. The instructor
 stops the session and downloads the attendance as CSV.
 
 Built with **FastAPI + Jinja2 + SQLite + Google OAuth** — no frontend build
@@ -31,8 +32,12 @@ step, no external database.
 - **Optional WiFi restriction** — client-side WebRTC local-IP detection with
   public-IP fallback (the server sits behind NAT and usually cannot see the
   phone's LAN IP)
-- **Optional Google Form step** — embedded iframe, per-student confirmation,
-  timeout fallback ("False (Timeout)")
+- **Optional Google Form step** — **native quiz** by default: the app reads
+  the form's questions and renders them itself, hides the Email question,
+  and forwards the answers to the same Google Form server-side with the
+  OAuth-verified email (no account chooser, no editable email). Unsupported
+  or sign-in-required forms fall back to the embedded iframe. Timeout
+  fallback records "False (Timeout)"
 - **Anti-sharing enforcement** — DB `UNIQUE` on both `email` and `device_id`:
   one mark per student, one mark per device
 - **Per-session storage** — every start creates a fresh PostgreSQL table
@@ -133,14 +138,25 @@ All configuration is via environment variables:
    the session immediately; it does not stop a running attendance session.
 2. Fill Session Config (env defaults are pre-filled where set):
    - **Google Form URL** — from `DEFAULT_FORM_URL`; leave empty to skip
-     the form step entirely. At start the app fetches the form and
-     auto-detects an email question (first short-answer/paragraph question
-     whose title mentions "email"), prefilling it with the verified email;
-     `authuser` is added as a fallback. For a smooth flow, in the form
-     settings choose **Do not collect email addresses**, turn off **Limit to
-     1 response** and any org restriction, and add a required short-answer
-     **Email** question — students then never see an account chooser. (A
-     manual `{email}` placeholder / `entry.<id>=` param still works.)
+     the form step entirely. At start the app fetches the form and chooses a
+     mode:
+     - **Native quiz (green)** — the form is public, single-page, uses
+       short-answer/paragraph/multiple-choice/dropdown/checkbox/scale
+       questions (no grids/dates/times/"Other"), and has a short-answer
+       **Email** question (mark it required for the embedded path).
+       Students answer the questions in-app; the Email question is hidden
+       and filled server-side from the OAuth session, and the answers are
+       forwarded to the same Google Form (so the Sheet still receives them;
+       grading/feedback stays in Google Forms). Native mode requires the
+       form settings **Do not collect email addresses**, no **Limit to 1
+       response**, and no org restriction.
+     - **Embedded fallback (amber/red)** — anything else (multi-page,
+       unsupported question types, "Other", sign-in required, no Email
+       question). The inline verdict under the URL gives the reason; the
+       iframe flow and email prefill still work as before.
+     The attendance database/CSV is always the verified identity source.
+     (A manual `{email}` placeholder / `entry.<id>=` param still works for
+     the embedded path.)
    - **Form Timeout** — seconds a student gets to fill the form (enabled
      once a form URL is present); defaults to `DEFAULT_FORM_TIMEOUT` (300 s).
    - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it,
@@ -156,12 +172,17 @@ All configuration is via environment variables:
 ### Student
 1. Scan the QR → optional WiFi check page → redirected to Google.
 2. Sign in with the allowed college account.
-3. If a form is configured: submit the embedded form. Your verified email
-   is pre-filled (no account choosing needed). Attendance is marked
-   automatically once Google records the response; if the form requires
-   sign-in, a **Confirm Attendance** button appears instead. You cannot be
-   marked without submitting — if you run out of time, the timer records
-   `False (Timeout)`.
+3. If a form is configured:
+   - **Native quiz:** answer the questions on the app page. The Email
+     question is not shown — your verified college email is attached
+     automatically. Submit before the timer; attendance is recorded only
+     after Google accepts the forwarded response.
+   - **Embedded fallback:** submit the iframe form (verified email
+     pre-filled). Attendance is marked automatically once Google records
+     the response; if the form requires sign-in, a **Confirm Attendance**
+     button appears instead.
+   You cannot be marked without submitting — if you run out of time, the
+   timer records `False (Timeout)`.
 4. Success screen shows the recorded email.
 
 ---
@@ -173,7 +194,8 @@ All configuration is via environment variables:
 ├── main.py                    # FastAPI app — all routes and logic
 ├── templates/
 │   ├── admin_dashboard.html   # Admin UI: login, QR, session config
-│   ├── form.html              # Embedded Google Form + timer + confirm
+│   ├── quiz.html              # Native quiz: questions + timer + submit
+│   ├── form.html              # Fallback embedded Google Form + timer + confirm
 │   ├── network_check.html     # WebRTC WiFi verification interstitial
 │   └── status.html            # Success/error screen for students
 ├── loadtest/locustfile.py     # Realistic load test (see below)
@@ -197,13 +219,15 @@ Admin endpoints accept either the browser **session cookie** (set by
 | POST | `/api/admin/start` | Start session → creates session DB (500 detail names the storage error) |
 | GET  | `/api/admin/diagnostics` | Storage health: mode, `DATABASE_URL` presence, psycopg, connect test |
 | POST | `/api/admin/stop` | Stop session → returns CSV, deactivates |
+| POST | `/api/admin/inspect-form` | Preview form mode (native quiz / embedded reason / email question) |
 | GET  | `/api/admin/generate-qr-token` | New signed QR token (`?lifespan=45`) |
 | GET  | `/api/check-ip` | Server-observed client IP + match status |
 | GET  | `/scan?token=...` | Student entry point |
 | POST | `/api/verify-network` | Verify WebRTC local IP / public IP |
 | GET  | `/login` → `/auth/callback` | Google OAuth flow |
 | POST | `/finalize-attendance` | Record attendance after the form |
-| POST | `/api/form/confirm` | Mark the form as submitted |
+| POST | `/api/quiz/submit` | Native quiz: validate answers, forward to Google, record attendance |
+| POST | `/api/form/confirm` | Mark the embedded form as submitted |
 | POST | `/api/form/status` | Poll confirmation state |
 
 ---
@@ -250,7 +274,11 @@ Full analysis and bottleneck discussion: see `WORK.md`.
 | Second phone gets "already scanned" | You are running **old code** — `consumed_tokens` must be a dict keyed by `(nonce, device_id)`. Restart/redeploy. |
 | "Use your @... account" | Signed into the wrong Google account. |
 | Form asks to choose/sign in with a Google account | In the form settings: **Do not collect email addresses**, turn off **Limit to 1 response** and org restrictions, and add a short-answer **Email** question. The app detects and pre-fills it, so no account chooser is needed. |
+| Inline check says **embedded mode** instead of native quiz | Hover/read the reason: multi-page form, unsupported question type (grid/date/time), an "Other" option, sign-in required, or no Email question. Make the form single-page with basic question types and add a required short-answer **Email** question; otherwise the iframe fallback is used. |
+| Native quiz submit fails (502) | Google did not accept the forwarded response (rate-limit/captcha/wording change). Ask the student to retry; if it persists, stop the session and restart with a form that forces the embedded fallback (e.g. add a page break or an "Other" option). `formResponse` is an undocumented endpoint. |
 | Form response shows a different email | The form records its own account/question. Fix the form settings above; the attendance database always stores the OAuth-verified email regardless. |
+| Embedded form shows my personal Gmail | That chip is the phone browser's Google session, not the recorded email. If it says **Not shared**, the response is anonymous — add a short-answer **Email** question (the app prefills the college email). If it collects email, switch to **Do not collect**. |
+| Late form submission after the timer | Google Forms cannot be time-locked. The app rejects late attendance confirmation and records `False (Timeout)`; ignore quiz responses timestamped after the deadline. |
 | "Device not verified" | Cookies blocked, or the QR expired before finishing — scan again. |
 | WiFi check fails on cellular/VPN | Prefix check needs the campus WiFi; clear the IP field to disable the restriction. |
 | iPhone says WiFi IP "not detected" | Expected — iOS hides local IPs. The public IP is used instead (same campus network as the instructor passes automatically); clear the IP field if it still blocks. |

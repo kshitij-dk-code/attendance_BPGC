@@ -88,8 +88,10 @@ GET /login ──────────────────▶ Google OAut
                                /auth/callback
                                • domain check on email
                                • no form_url → INSERT → status ✓
-                               • form_url → render form.html
-                               POST /api/form/confirm (button)
+                               • native quiz → render quiz.html
+                                 POST /api/quiz/submit → Google formResponse
+                               • fallback → render form.html
+                                 POST /api/form/confirm (button)
                                POST /finalize-attendance → INSERT → status ✓
 POST /api/admin/stop   ──────▶ is_active=False, streams CSV
 ```
@@ -98,7 +100,7 @@ POST /api/admin/stop   ──────▶ is_active=False, streams CSV
 
 | Structure | Key/Value | Meaning |
 |-----------|-----------|---------|
-| `session_state` | dict | current session: active flag, form URL, timeout, allowed IP, instructor's public IP (`admin_public_ip`), **db file** |
+| `session_state` | dict | current session: active flag, form URL/view URL, timeout, allowed IP, instructor's public IP (`admin_public_ip`), email entry + sign-in flag, parsed native `quiz` + `native_reason`, **db file/table** |
 | `consumed_tokens` | `(nonce, device_id) → timestamp` | QR consumption; entries pruned after 24 h (`CONSUMED_MAX_AGE`) |
 | `form_confirmed` | set of emails | whether the student pressed the form-confirm button |
 
@@ -115,7 +117,7 @@ requirement until this state moves to SQLite/Redis. (Load-test §7.)
 | `device_session` cookie | serializer | 300 s | `device_id`, observed IP |
 | `device_id` cookie | random hex(16) | 1 year | the permanent device fingerprint |
 | `net_token` (network check form) | serializer | 300 s | `device_id`, public IP |
-| form `form_token` | serializer | 1800 s | `email`, `device_id` |
+| form `form_token` | serializer | 1800 s | `email`, `device_id`, absolute `deadline` (timeout + 15 s) |
 
 - `nonce = str(time.time())` — expiry is `now - nonce > lifespan`.
 - A QR is **per-device single-use but multi-device**: two students may scan
@@ -142,6 +144,7 @@ attendance(
   device_id TEXT UNIQUE,      -- one mark per device per session
   timestamp DATETIME/TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   form_submitted TEXT,
+  quiz_answers TEXT,
   ip_address TEXT)
 ```
 
@@ -362,6 +365,23 @@ Replit/Cloudflare-style proxies.
   — the response then carries the OAuth email with no account chooser.
   `inspect_form()` also flags sign-in-required forms (real login page or
   accounts.google.com redirect) so the admin sees a warning at start.
+- **Form sanity check before starting:** the dashboard calls
+  `POST /api/admin/inspect-form` (debounced on input) and shows an inline
+  verdict under the URL field: green = email question detected; amber = no
+  Email question (responses anonymous); red = sign-in required. The start
+  toast repeats the amber/red warning for 7 s, and the student form page
+  says when the response will be anonymous — this configuration mistake is
+  no longer silent. A form showing a personal Gmail chip with "Not shared"
+  is **not** recording that account; only a real Email question records the
+  verified email. The prefilled answer is editable (Google has no read-only
+  prefill), so the attendance DB remains the verified identity source for
+  quizzes.
+- **Late-submission backstop:** the form token carries an absolute
+  `deadline` (timeout + 15 s); `/api/form/confirm` rejects after it, so a
+  form opened in another window cannot confirm attendance after the timer.
+  Timeout finalization is intentionally not deadline-checked. Google Forms
+  itself cannot be time-locked — late quiz responses can be ignored by
+  timestamp.
 - **Default form timeout:** `DEFAULT_FORM_TIMEOUT` env (blank/non-numeric →
   `300`) is pre-filled in the Session Config and is the server-side fallback
   when `/api/admin/start` receives `timeout <= 0`.
@@ -371,13 +391,76 @@ Replit/Cloudflare-style proxies.
   status + detail, and `GET /api/admin/diagnostics` (authed) reports
   `storage`, `database_url_set`, `psycopg_installed`, `base_dir`,
   `db_connect_ok` and `db_error` without leaking secrets.
-- **Verified:** TestClient 31 checks — login/logout gate, timeout prefill +
+- **Verified:** TestClient 36 checks — login/logout gate, timeout prefill +
   env override (600/blank/junk), timeout-0 fallback, admin-IP capture,
   geofence (local match, iPhone public/admin match, comma prefixes,
-  off-network block), strict/auto-mark form template, form email parser,
-  `build_form_url()` (`{email}`, detected entry, `authuser`, keeps
-  params/fragment), live public-form sign-in false-positive check;
-  `Authlib 1.9.1` import clean.
+  off-network block), strict/auto-mark form template, anonymous-response
+  note, form email parser, `build_form_url()` (`{email}`, detected entry,
+  `authuser`, keeps params/fragment), inspect-form auth/URL validation,
+  expired/future confirm deadline, live public-form sign-in false-positive
+  check; `Authlib 1.9.1` import clean.
+
+### 3.13 Native quiz mode — Google Form questions rendered in-app, email hidden, answers forwarded server-side
+- **Why:** an embedded Google Form always shows Google's account chip and
+  (when email collection is off) records an anonymous response; `authuser`
+  cannot force the college account. The instructor asked for a native quiz
+  fetched from the form link, with the email hidden and filled in on the
+  backend. That is now the primary path; the iframe remains the fallback.
+- **Parsing:** `parse_form_structure()` reads Google's
+  `FB_PUBLIC_LOAD_DATA_` blob (title/description/items/entries). Supported
+  types: 0 short answer, 1 paragraph, 2 radio, 3 dropdown, 4 checkboxes,
+  5 linear scale. Section headers (6) are skipped; image/video (11/12) are
+  ignored. Multi-page forms (8), grids (7), date/time (9/10) and any
+  "Other" option make native mode **unsuitable**. The first short-answer/
+  paragraph question whose title matches `e-?mail` is the email entry and
+  is **excluded** from the native UI.
+- **Suitability:** `native_suitability()` returns `native_ok` + a
+  human-readable reason. Native mode requires: public form (no
+  sign-in/collect-email/limit-1), single page, supported types, no "Other",
+  and an Email question. Otherwise the dashboard shows amber "embedded
+  mode" with the reason and the old iframe flow is used unchanged.
+- **Start:** `/api/admin/start` calls `inspect_form()` (now returns a dict:
+  `email_entry`, `signin_required`, `view_url`, `response_url`, `quiz`,
+  `native_ok`, `native_reason`) via `asyncio.to_thread`. On success it
+  stores `form_view_url`, `quiz` and `native_reason` in `session_state`;
+  the response adds `native_quiz`, `question_count`, `native_reason`.
+- **Student flow:** `/auth/callback` renders `templates/quiz.html` when a
+  quiz is stored. The page shows the form title/description, one card per
+  question (email omitted), the verified email chip, and the countdown.
+  `POST /api/quiz/submit` validates the signed token (max age 1800 s), the
+  form-token deadline, required answers/options/length (5000), and rejects
+  duplicate email (409). It then POSTs the answers to Google's
+  `formResponse` endpoint in a worker thread, inserting the row with
+  `form_submitted="True (Quiz)"` and `quiz_answers` JSON only after Google
+  accepts. The client shows success and posts the hidden
+  `False (Timeout)` finalize form if the timer expires first.
+- **Email binding:** the client never supplies the email; the server builds
+  `entry.<email_entry>=<verified email>` from the OAuth session, alongside
+  the visible answers. Checkboxes are repeated fields; the payload includes
+  `fvv=1`, `pageHistory=0`, `fbzx` (scraped from the form page) and
+  `submit=Submit`, with the form view URL as `Referer`. A fresh form GET
+  supplies the current `fbzx` on every submission.
+- **Google acceptance detection:** HTTP 200 + "Your response has been
+  recorded"/"submitted"/"thanks" is success; HTTP 400 + "required question"
+  or `data-validation-failed="true"` is a validation error; "no longer
+  accepting responses" and sign-in pages are surfaced as failures (502 to
+  the client, which allows retry). A 200 without a known marker is treated
+  as success with a server log — Google can change the wording.
+- **CSV:** the schema/CSV gained `quiz_answers` / "Quiz Answers" (JSON:
+  form title, verified email, question titles → answers; checkboxes joined
+  with `"; "`). Google Sheets still receives the same response; the
+  attendance DB remains the verified identity source.
+- **Verified:** 68/68 TestClient checks (previous 36 + parser, suitability,
+  response-URL derivation, payload/email/checkbox, normalization, CSV,
+  mocked native start, mocked end-to-end quiz submit, duplicate/required/
+  invalid/expired, template renders + hides email). Live check against the
+  public test form: structure parsed ("My form", 1 item), `native_ok=False`
+  because it has no Email question (as designed), and a real `formResponse`
+  POST was accepted (`submit: True`).
+- **Caveats:** `formResponse` is undocumented and may rate-limit/captcha or
+  change; native mode is intentionally disabled for multi-page/unsupported
+  forms; Google Forms cannot be time-locked, so ignore quiz responses
+  timestamped after the deadline. Test the actual form once after deploy.
 
 ---
 
@@ -385,9 +468,10 @@ Replit/Cloudflare-style proxies.
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage + form inspection/binding (101–216), admin API incl. login/logout/start/diagnostics (223–390), `/scan` (393–440), network verify (442–481), OAuth (484–538), form APIs (540–556), finalize (559–594) |
-| `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()` |
-| `templates/form.html` | Form iframe, timer, confirm button, new-tab fallback |
+| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage + form parsing/inspection/binding/forwarding (104–381), models (383–396), admin API incl. login/logout/start/inspect/diagnostics/stop/QR (399–594), `/scan` (597–644), network verify (646–686), OAuth (688–755), form APIs (757–775), quiz normalize + submit (777–882), finalize (884–919) |
+| `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()`, inline form check |
+| `templates/quiz.html` | Native quiz page: questions, timer, verified email chip, `/api/quiz/submit`, timeout finalize |
+| `templates/form.html` | Fallback embedded form, timer, confirm button, new-tab fallback |
 | `templates/network_check.html` | WebRTC detection (skipped on iOS) + POST `/api/verify-network` |
 | `templates/status.html` | Success/error + email chip |
 | `loadtest/locustfile.py` | Realistic load test (admins + students; `LOCUST_NO_WAIT=1` for ceiling mode) |
@@ -460,7 +544,7 @@ main.session_state.update({"is_active": True, "form_url": "", "timeout": 300,
 sqlite3.connect("scratch.db").execute(
   "CREATE TABLE IF NOT EXISTS attendance (id INTEGER PRIMARY KEY, email TEXT UNIQUE,"
   " device_id TEXT UNIQUE, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,"
-  " form_submitted TEXT, ip_address TEXT)")
+  " form_submitted TEXT, quiz_answers TEXT, ip_address TEXT)")
 tok = main.serializer.dumps({"nonce": str(time.time()), "lifespan": 45})
 for name in ("A", "B"):
     c = TestClient(main.app)
@@ -561,13 +645,20 @@ LOCUST_NO_WAIT=1 ... # same, ceiling mode
    requirement; embeds opened in a new tab can only finish via the timeout
    (`False (Timeout)`). Email-field auto-detection parses Google's
    `FB_PUBLIC_LOAD_DATA_` blob — if Google changes it, use the `{email}`
-   placeholder or a manual `entry.<id>=` param.
+   placeholder or a manual `entry.<id>=` param. Native quiz mode depends on
+   the same blob plus Google's undocumented `formResponse` endpoint; if it
+   breaks, the form automatically falls back to the embedded path (set the
+   form URL again or restart after fixing the parser).
 6. Attendance CSV column "Device Fingerprint" exposes raw `device_id` —
    intentional for auditing; don't log it anywhere public.
 7. **No login rate-limiting** — explicit logout now exists (§3.12) and auth
    expires 10 min after login (§3.10, page-load check only), but
    `/api/admin/login` has no lockout (fine for a local tool; add a backoff if
    shared machines ever matter).
+8. **Google `formResponse` is undocumented** — native quiz forwarding can
+   break without notice; success detection relies on English markers
+   ("recorded"/"submitted"/"thanks"). Re-verify with the real form after
+   Google changes; add captcha/rate-limit handling only if it ever appears.
 
 ---
 

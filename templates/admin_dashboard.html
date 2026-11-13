@@ -586,7 +586,7 @@
                 <div class="input-group">
                     <label>Google Form Embed URL (Optional)</label>
                     <input type="url" id="form-url-input" value="{{ default_form_url }}" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
-                    <small>Put <code>{email}</code> in an entry parameter to prefill the verified email (e.g. <code>&amp;entry.123456={email}</code>). The form opens with that account selected.</small>
+                    <small>For automatic submissions: in the form settings choose <strong>Do not collect email addresses</strong>, turn off "Limit to 1 response", and add a short-answer <strong>Email</strong> question — it is detected and prefilled with the verified email. (<code>{email}</code> in an entry parameter still works as a manual override.)</small>
                 </div>
 
                 <div class="input-group">
@@ -613,12 +613,12 @@
     <div id="toast"></div>
 
     <script>
-        function showToast(msg) {
+        function showToast(msg, isError) {
             const t = document.getElementById('toast');
             t.textContent = msg;
-            t.style.borderLeft = '4px solid var(--primary)';
+            t.style.borderLeft = isError ? '4px solid var(--error)' : '4px solid var(--primary)';
             t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 3000);
+            setTimeout(() => t.classList.remove('show'), isError ? 7000 : 3000);
         }
 
         let refreshInterval = null;
@@ -693,7 +693,17 @@
                     document.getElementById('qr-container').classList.remove('blurred');
                     document.getElementById('stop-btn-container').style.display = 'block';
                     fetchToken();
-                    showToast('Session started' + (data.storage ? ' (' + data.storage + ')' : '') + '.');
+                    let msg = 'Session started' + (data.storage ? ' (' + data.storage + ')' : '') + '.';
+                    let isError = false;
+                    if (data.form_signin_required) {
+                        msg = '⚠ This form requires Google sign-in. Turn off "Collect email addresses" and "Limit to 1 response" so it submits automatically.';
+                        isError = true;
+                    } else if (formUrl.trim() && data.form_email_entry) {
+                        msg = 'Session started — the verified email will be auto-filled in the form.';
+                    } else if (formUrl.trim()) {
+                        msg = 'Session started. Tip: add a short-answer "Email" question so responses carry the verified email.';
+                    }
+                    showToast(msg, isError);
                 } else {
                     let detail = '';
                     try {

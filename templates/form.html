@@ -267,7 +267,13 @@
         <div class="header">
             <h2>Required Feedback Form</h2>
             <div class="email-chip">Logged in as <strong>{{ email }}</strong></div>
+            {% if signin_required %}
             <div class="email-note">Submit this form as <strong>{{ email }}</strong>. If Google shows a different account, switch to this one before submitting.</div>
+            {% elif email_prefilled %}
+            <div class="email-note">Your verified email <strong>{{ email }}</strong> is filled into the form automatically — no need to choose a Google account.</div>
+            {% else %}
+            <div class="email-note">Attendance is linked to <strong>{{ email }}</strong>.</div>
+            {% endif %}
         </div>
 
         <div id="iframe-wrapper">
@@ -292,6 +298,8 @@
         let loadCount = 0;
         let timeLeft = parseInt("{{ timeout_seconds }}") || 300;
         const formToken = "{{ form_token }}";
+        const signinRequired = {{ signin_required | tojson }};
+        const pageLoadedAt = Date.now();
 
         const iframe = document.getElementById('google-form');
         const statusText = document.getElementById('status-text');
@@ -311,9 +319,16 @@
                 if (resp.ok) {
                     confirmed = true;
                     clearInterval(countdown);
-                    statusText.innerText = "✅ Form submitted! You can now confirm your attendance.";
                     statusText.classList.add("success-text");
                     confirmBtn.style.display = 'inline-block';
+                    if (!signinRequired && Date.now() - pageLoadedAt > 1500) {
+                        // Anonymous embedded form: a 2nd load is the "response
+                        // recorded" page, so finish automatically.
+                        statusText.innerText = "✅ Form submitted! Marking your attendance…";
+                        setTimeout(() => finalizeAttendance(true), 700);
+                    } else {
+                        statusText.innerText = "✅ Form submitted! Tap Confirm Attendance.";
+                    }
                 }
             } catch (e) {
                 console.error("Confirm failed", e);

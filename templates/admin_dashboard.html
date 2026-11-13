@@ -220,9 +220,9 @@
         #logout-btn {
             position: fixed;
             top: 20px;
-            right: 20px;
+            right: 24px;
             z-index: 1500;
-            padding: 10px 20px;
+            padding: 10px 24px;
             background: rgba(255, 255, 255, 0.08);
             border: 1.5px solid var(--card-border);
             border-radius: 12px;
@@ -524,7 +524,7 @@
             #qr-wrapper { max-width: min(520px, 85vw, 65vh); border-radius: 32px; }
             #qr-overlay { border-radius: 32px; padding: 32px 20px; }
             #qr-container { border-radius: 24px; padding: 16px; }
-            #logout-btn { top: 12px; right: 12px; padding: 8px 14px; font-size: 0.78rem; }
+            #logout-btn { top: 12px; right: 16px; padding: 8px 18px; font-size: 0.78rem; }
         }
     </style>
 </head>
@@ -586,6 +586,7 @@
                 <div class="input-group">
                     <label>Google Form Embed URL (Optional)</label>
                     <input type="url" id="form-url-input" value="{{ default_form_url }}" placeholder="https://docs.google.com/forms/..." oninput="toggleTimeout()">
+                    <small>Put <code>{email}</code> in an entry parameter to prefill the verified email (e.g. <code>&amp;entry.123456={email}</code>). The form opens with that account selected.</small>
                 </div>
 
                 <div class="input-group">

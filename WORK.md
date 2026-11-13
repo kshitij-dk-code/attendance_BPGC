@@ -341,12 +341,20 @@ Replit/Cloudflare-style proxies.
   accepts a **comma-separated list** (`10.20.1.,47.29.`), and the failure
   panel says "not detected (normal on iPhone)" instead of a bare
   "not detected". `/api/check-ip` understands the list too.
-- **Google Form embed hang:** some accounts/embeds submit or navigate outside
-  the iframe, so the old "confirm appears on the 2nd iframe load" logic never
-  fired and the page sat until the timeout. Now the confirm button appears
-  after the **first** load (manual confirm), a second load still auto-confirms,
-  an **"Open the form in a new tab"** link is always available, and a 6 s
-  fallback reveals the confirm button if the embed never loads.
+- **Google Form gating (strict):** the confirm button appears **only after
+  the second iframe load** (Google's "response recorded" page). The first-load
+  manual confirm and the 6 s fallback were removed — a student cannot mark
+  attendance without submitting the form; if they run out of time the timer
+  records `False (Timeout)`. An "Open in a new tab" link remains for blocked
+  embeds.
+- **Form uses the verified email:** `build_form_url()` runs at render time:
+  it replaces a `{email}` placeholder (put it in an `entry.<id>=` param to
+  prefill an email question) and appends `authuser=<verified email>` so
+  Google opens the form with the account chosen during OAuth (when signed in).
+  The form page repeats the email and warns to switch accounts if Google
+  shows another one. Google Forms still records whatever account submits the
+  response — `authuser` is the strongest available binding; the attendance
+  DB always stores the OAuth email independently.
 - **Default form timeout:** `DEFAULT_FORM_TIMEOUT` env (blank/non-numeric →
   `300`) is pre-filled in the Session Config and is the server-side fallback
   when `/api/admin/start` receives `timeout <= 0`.
@@ -356,10 +364,11 @@ Replit/Cloudflare-style proxies.
   status + detail, and `GET /api/admin/diagnostics` (authed) reports
   `storage`, `database_url_set`, `psycopg_installed`, `base_dir`,
   `db_connect_ok` and `db_error` without leaking secrets.
-- **Verified:** TestClient 23 checks — login/logout gate, timeout prefill +
+- **Verified:** TestClient 27 checks — login/logout gate, timeout prefill +
   env override (600/blank/junk), timeout-0 fallback, admin-IP capture,
   geofence (local match, iPhone public/admin match, comma prefixes,
-  off-network block), template renders; `Authlib 1.9.1` import clean.
+  off-network block), strict form template, `build_form_url()` (`{email}` +
+  `authuser`, keeps params/fragment); `Authlib 1.9.1` import clean.
 
 ---
 
@@ -367,7 +376,7 @@ Replit/Cloudflare-style proxies.
 
 | File | Role |
 |------|------|
-| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage (93–139), admin API incl. login/logout/start/diagnostics (148–309), `/scan` (312–360), network verify (362–401), OAuth (403–455), form APIs (457–474), finalize (477–512) |
+| `main.py` | Everything backend: config (l.16–58), helpers/auth/storage + `build_form_url` (94–156), admin API incl. login/logout/start/diagnostics (165–327), `/scan` (330–377), network verify (379–418), OAuth (421–473), form APIs (475–491), finalize (494–529) |
 | `templates/admin_dashboard.html` | Login gate, QR wrapper, session config, logout button, `detectAdminIP()` |
 | `templates/form.html` | Form iframe, timer, confirm button, new-tab fallback |
 | `templates/network_check.html` | WebRTC detection (skipped on iOS) + POST `/api/verify-network` |
@@ -538,9 +547,11 @@ LOCUST_NO_WAIT=1 ... # same, ceiling mode
 3. **`consumed_tokens` grows for 24 h** — fine now (pruned), but if state
    moves to a store, keep the TTL.
 4. No automated tests — the §6 simulation is the seed for a real suite.
-5. `form.html` confirm UX still watches iframe load events for auto-confirm;
-   the manual confirm + new-tab link + 6 s fallback (§3.12) make it robust,
-   but Google UI changes can always alter the auto-detect.
+5. `form.html` confirm UX still watches iframe load events (2nd load =
+   submitted). This is the strict gate requested; a Google redirect can
+   occasionally look like a submission, and embeds opened in a new tab can
+   only finish via the timeout (`False (Timeout)`). Google UI changes can
+   always alter the auto-detect.
 6. Attendance CSV column "Device Fingerprint" exposes raw `device_id` —
    intentional for auditing; don't log it anywhere public.
 7. **No login rate-limiting** — explicit logout now exists (§3.12) and auth

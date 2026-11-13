@@ -13,6 +13,7 @@ import secrets
 import io
 import csv
 import traceback
+from urllib.parse import quote, urlsplit, urlunsplit
 
 os.environ["AUTHLIB_INSECURE_TRANSPORT"] = "1"
 
@@ -25,18 +26,18 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_SESSION_TIMEOUT = 600  # 10 minutes
 # Default WiFi IP prefix pre-filled in the Session Config (still editable per session).
 # Set DEFAULT_ALLOWED_IP env var to override, or set it to "" to ship with no default.
-DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.")
+DEFAULT_ALLOWED_IP = os.getenv("DEFAULT_ALLOWED_IP", "10.20.1.92")
 # Default QR refresh timer (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 45 secs (non-numeric values also fall back).
-DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "15").strip() or "45"
+DEFAULT_TIMER = os.getenv("DEFAULT_TIMER", "").strip() or "45"
 if not DEFAULT_TIMER.isdigit():
     DEFAULT_TIMER = "45"
 # Default Google Form embed URL pre-filled in the Session Config.
 # Leave it blank and it stays blank (sessions then run with no form).
-DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "https://forms.gle/chE85GpHKYWwqy5T8").strip()
+DEFAULT_FORM_URL = os.getenv("DEFAULT_FORM_URL", "").strip()
 # Default form timeout (seconds) pre-filled in the Session Config.
 # Leave it blank to fall back to 300 secs (non-numeric values also fall back).
-DEFAULT_FORM_TIMEOUT = os.getenv("DEFAULT_FORM_TIMEOUT", "200").strip() or "300"
+DEFAULT_FORM_TIMEOUT = os.getenv("DEFAULT_FORM_TIMEOUT", "").strip() or "300"
 if not DEFAULT_FORM_TIMEOUT.isdigit():
     DEFAULT_FORM_TIMEOUT = "300"
 
@@ -109,6 +110,22 @@ def safe_db_error(exc):
     if DATABASE_URL:
         msg = msg.replace(DATABASE_URL, "***")
     return msg[:500]
+
+def build_form_url(url, email):
+    """Bind the form to the OAuth-verified email.
+
+    - Replaces a `{email}` placeholder (use it in an `entry.<id>=` param to
+      prefill the form's email question).
+    - Adds/replaces `authuser=<email>` so Google opens the form with that
+      account selected when it is signed in to the browser.
+    """
+    encoded = quote(email, safe="")
+    url = url.replace("{email}", encoded)
+    parts = urlsplit(url)
+    # Drop any existing authuser (keep every other param verbatim), then append.
+    params = [p for p in parts.query.split("&") if p and p.split("=", 1)[0].lower() != "authuser"]
+    params.append(f"authuser={encoded}")
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "&".join(params), parts.fragment))
 
 def get_client_ip(request: Request):
     # Try multiple headers in order of reliability behind proxies
@@ -447,7 +464,7 @@ async def auth_callback(request: Request, device_session: str = Cookie(None)):
     return templates.TemplateResponse(request=request, name="form.html", context={
         "email": email, 
         "form_token": form_token, 
-        "form_url": session_state["form_url"],
+        "form_url": build_form_url(session_state["form_url"], email),
         "timeout_seconds": session_state["timeout"]
     })
 

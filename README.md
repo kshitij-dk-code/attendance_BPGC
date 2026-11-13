@@ -133,7 +133,9 @@ All configuration is via environment variables:
    the session immediately; it does not stop a running attendance session.
 2. Fill Session Config (env defaults are pre-filled where set):
    - **Google Form URL** — from `DEFAULT_FORM_URL`; leave empty to skip
-     the form step entirely.
+     the form step entirely. Put `{email}` in an entry parameter to prefill
+     the verified email (e.g. `&entry.123456={email}`); the form also opens
+     with the student's chosen Google account (`authuser`).
    - **Form Timeout** — seconds a student gets to fill the form (enabled
      once a form URL is present); defaults to `DEFAULT_FORM_TIMEOUT` (300 s).
    - **WiFi IP Prefix** — pre-filled from `DEFAULT_ALLOWED_IP`; edit it,
@@ -149,10 +151,10 @@ All configuration is via environment variables:
 ### Student
 1. Scan the QR → optional WiFi check page → redirected to Google.
 2. Sign in with the allowed college account.
-3. If a form is configured: fill the embedded form and press **Confirm
-   Attendance**. The button appears as soon as the form loads; if the embed
-   opens the form in another tab, use the "Open it here" link, submit there,
-   then confirm. The timer finalizes stragglers as `False (Timeout)`.
+3. If a form is configured: submit the embedded form **as the account shown
+   on the page**. The **Confirm Attendance** button only appears after
+   Google records the response — you cannot confirm without submitting. If
+   you run out of time, the timer finalizes the mark as `False (Timeout)`.
 4. Success screen shows the recorded email.
 
 ---
